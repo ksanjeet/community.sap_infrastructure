@@ -58,6 +58,11 @@ For list of all collection prerequisites, please see [Ansible Collection Readme]
   - **NOTE:** Some requirements can be in conflict with other Infrastructure Platforms. We recommend installing Microsoft Azure a separate Python Virtual Environment.
 - Ansible Collections:
   - `azure.azcollection`
+- High Availability fencing (`sap_vm_provision_msazure_ha_fencing_method`):
+  - `fence_azure_arm` (default): Azure Fence Agent with the VM Managed Service Identity, the role creates a custom IAM role
+    and role assignments (requires Owner or User Access Administrator).
+  - `sbd_shared_disk`: SBD on an Azure shared disk (Premium SSD, `maxShares`) attached at the same LUN to all cluster hosts,
+    no IAM role required (Contributor is sufficient).
 
 ### IBM Cloud Prerequisites
 - Operating System packages:
@@ -86,6 +91,20 @@ For list of all collection prerequisites, please see [Ansible Collection Readme]
   - `aiohttp`
 - Ansible Collections:
   - `vmware.vmware_rest`
+
+### Apache CloudStack Prerequisites
+- Python libraries and modules:
+  - `cs`
+  - `sshpubkeys`
+- Ansible Collections:
+  - `ngine_io.cloudstack` (>= 3.0.0)
+- CloudStack Template with cloud-init (CloudStack datasource) and Python >= 3.8 (e.g. `python311` on SLES 15).
+- Any hypervisor (KVM, XenServer/XCP-ng, VMware) and Primary Storage (selected with the Disk Offering storage tags).
+- High Availability fencing (`sap_vm_provision_cloudstack_ha_fencing_method`):
+  - `sbd_devices` (default): shared SBD block device(s) visible in all cluster VMs, `sap_vm_provision_cloudstack_ha_sbd_devices`.
+  - `sbd_linstor_kvm`: SBD disk created on LINSTOR and attached with virsh. Requires KVM, LINSTOR Primary Storage
+    (controller REST API reachable from the execution node), root admin API user and SSH with root privileges to the KVM hosts.
+  - `none`: own STONITH configuration.
 <!-- END Prerequisites -->
 
 ## Execution
@@ -105,6 +124,7 @@ A series of choices are deciding Ansible Role behavior:
 - OVirt Virtual Machines `[Experimental]`
 - KubeVirt Virtual Machines `[beta]` (e.g. Red Hat OpenShift Virtualization)
 - VMware vSphere Virtual Machines `[Experimental]`
+- Apache CloudStack Virtual Machines `[Experimental]`
 
 #### Microsoft Azure: Reliability Disclaimer
 Due to ongoing reliability issues with the Ansible Collection `azure.azcollection` for Microsoft Azure, unfortunately this Ansible Collection `community.sap_infrastructure` can only provide **best effort** assistance when errors occur on Microsoft Azure.
@@ -197,6 +217,7 @@ Additionally the Ansible Role `sap_vm_provision` is continuously tested for Red 
 - Virtual Disk with defined IOPS is only possible on AWS, Google Cloud, IBM Cloud
 
 ### Known issues
+- Apache CloudStack with fencing method `sbd_linstor_kvm`: the SBD shared disk for HA clusters is attached to the running KVM domains outside of CloudStack. A CloudStack stop/start or live migration of a cluster VM detaches it, re-run the provisioning to re-attach it.
 - VMware REST API combined with cloud-init is unstable, `userdata` configuration may not execute and provisioning will fail
 - On a kubevirt platform (e.g. Red Hat OpenShift) `ANSIBLE_JINJA2_NATIVE=true` has to be set in the environment.
 <!-- END Further Information -->
@@ -227,7 +248,7 @@ Defines the provisioning method.<br>
 
 ### sap_vm_provision_iac_platform
 - _Type:_ `string`<br>
-- _Choices:_ `aws_ec2_vs , gcp_ce_vm , ibmcloud_vs , ibmcloud_powervs , msazure_vm , ibmpowervm_vm , kubevirt_vm , ovirt_vm , vmware_vm`<br>
+- _Choices:_ `aws_ec2_vs , gcp_ce_vm , ibmcloud_vs , ibmcloud_powervs , msazure_vm , ibmpowervm_vm , kubevirt_vm , ovirt_vm , vmware_vm , cloudstack_vm`<br>
 
 Defines the target Infrastructure Platform.<br>
 

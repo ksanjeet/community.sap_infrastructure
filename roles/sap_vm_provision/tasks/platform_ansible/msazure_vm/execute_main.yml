@@ -35,7 +35,7 @@
       azure.azcollection.azure_rm_privatednszonelink_info:
         # DNS may exist in separate Resource Group.
         # Use empty string var (or default false if undefined) to evaluate to false boolean,and use Python or logic operator
-        resource_group: "{{ (sap_vm_provision_msazure_private_dns_resource_group_name | d(sap_vm_provision_msazure_resource_group_name)) }}"
+        resource_group: "{{ (sap_vm_provision_msazure_private_dns_resource_group_name | d(sap_vm_provision_msazure_resource_group_name, true)) }}"
         zone_name: "{{ sap_vm_provision_dns_root_domain }}"
         subscription_id: "{{ sap_vm_provision_msazure_subscription_id }}"
         tenant: "{{ sap_vm_provision_msazure_tenant_id }}"
@@ -136,7 +136,7 @@
       azure.azcollection.azure_rm_privatednsrecordset:
         # DNS may exist in separate Resource Group.
         # Use empty string var (or default false if undefined) to evaluate to false boolean, and use Python or logic operator
-        resource_group: "{{ sap_vm_provision_msazure_private_dns_resource_group_name | d(sap_vm_provision_msazure_resource_group_name) }}"
+        resource_group: "{{ sap_vm_provision_msazure_private_dns_resource_group_name | d(sap_vm_provision_msazure_resource_group_name, true) }}"
         zone_name: "{{ hostvars[inventory_hostname].sap_vm_provision_dns_root_domain }}"
         relative_name: "{{ inventory_hostname }}"
         record_type: A
@@ -229,6 +229,31 @@
     - name: SAP VM Provision - Azure - Set vars for sap_storage_setup Ansible Role
       ansible.builtin.include_tasks:
         file: common/set_ansible_vars_storage.yml
+
+    - name: SAP VM Provision - Azure - Register Web Forward Proxy
+      ansible.builtin.include_tasks:
+        file: common/register_proxy.yml
+
+    # SUSE Pay-As-You-Go images register to the SUSE Public Cloud update infrastructure at first boot. Without outbound
+    # connectivity at that time (e.g. egress only via the Web Forward Proxy configured above) no repositories exist.
+    - name: SAP VM Provision - Azure - Check repositories of SUSE Pay-As-You-Go image
+      ansible.builtin.shell:
+        cmd: set -o pipefail && command -v registercloudguest >/dev/null && zypper --quiet --non-interactive repos | grep -c '|' || true
+      register: __sap_vm_provision_register_msazure_suse_payg_repos
+      changed_when: false
+      when: ansible_facts['os_family'] == 'Suse'
+
+    - name: SAP VM Provision - Azure - Register SUSE Pay-As-You-Go image to SUSE Public Cloud update infrastructure
+      ansible.builtin.command:
+        cmd: registercloudguest --force-new
+      environment:
+        http_proxy: "{{ ('http://' ~ sap_vm_provision_proxy_web_forward_proxy_ip) if sap_vm_provision_proxy_web_forward_proxy_ip | d('') | length > 0 else omit }}"
+        https_proxy: "{{ ('http://' ~ sap_vm_provision_proxy_web_forward_proxy_ip) if sap_vm_provision_proxy_web_forward_proxy_ip | d('') | length > 0 else omit }}"
+        no_proxy: "localhost,127.0.0.1,169.254.169.254"
+      changed_when: true
+      when:
+        - ansible_facts['os_family'] == 'Suse'
+        - __sap_vm_provision_register_msazure_suse_payg_repos.stdout | d('') | trim in ['0']
 
     - name: SAP VM Provision - Azure - Register Package Repositories for OS Images with Bring-Your-Own-Subscription (BYOS)
       ansible.builtin.include_tasks:

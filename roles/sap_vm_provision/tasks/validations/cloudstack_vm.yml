@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: Apache-2.0
+---
+
+- name: Assert that Apache CloudStack is used with 'sap_vm_provision_iac_type' ansible
+  ansible.builtin.assert:
+    that:
+      - sap_vm_provision_iac_type == 'ansible'
+    fail_msg: |
+      Apache CloudStack ('cloudstack_vm') is only available with 'sap_vm_provision_iac_type: ansible'.
+
+- name: Assert that mandatory Apache CloudStack variables are defined
+  ansible.builtin.assert:
+    that:
+      - lookup('ansible.builtin.vars', loop_item, default='') is string
+      - lookup('ansible.builtin.vars', loop_item, default='') | trim | length > 0
+    fail_msg: |
+      The variable '{{ loop_item }}' is undefined or empty.
+  loop:
+    - sap_vm_provision_cloudstack_zone
+    - sap_vm_provision_cloudstack_network_name
+    - sap_vm_provision_cloudstack_vm_host_os_image
+    - sap_vm_provision_cloudstack_vm_disk_offering
+    - sap_vm_provision_cloudstack_vm_ssh_keypair_name
+    - sap_vm_provision_ssh_host_private_key_file_path
+  loop_control:
+    loop_var: loop_item
+
+- name: Assert that Apache CloudStack API credentials are provided by variables, environment or cloudstack.ini
+  ansible.builtin.assert:
+    that:
+      - (sap_vm_provision_cloudstack_api_url | d('') | length > 0
+          and sap_vm_provision_cloudstack_api_key | d('') | length > 0
+          and sap_vm_provision_cloudstack_api_secret | d('') | length > 0)
+        or (lookup('ansible.builtin.env', 'CLOUDSTACK_ENDPOINT') | length > 0
+          and lookup('ansible.builtin.env', 'CLOUDSTACK_KEY') | length > 0
+          and lookup('ansible.builtin.env', 'CLOUDSTACK_SECRET') | length > 0)
+        or lookup('ansible.builtin.env', 'CLOUDSTACK_CONFIG') | length > 0
+        or (lookup('ansible.builtin.env', 'HOME') ~ '/.cloudstack.ini') is file
+        or 'cloudstack.ini' is file
+    fail_msg: |
+      Apache CloudStack API credentials were not found. Define either:
+      - sap_vm_provision_cloudstack_api_url, sap_vm_provision_cloudstack_api_key, sap_vm_provision_cloudstack_api_secret
+      - environment variables CLOUDSTACK_ENDPOINT, CLOUDSTACK_KEY, CLOUDSTACK_SECRET
+      - a cloudstack.ini file (CLOUDSTACK_CONFIG, ~/.cloudstack.ini or ./cloudstack.ini)
+
+- name: Assert that the OS image is defined in 'sap_vm_provision_cloudstack_vm_host_os_image_dictionary'
+  ansible.builtin.assert:
+    that:
+      - sap_vm_provision_cloudstack_vm_host_os_image_dictionary[sap_vm_provision_cloudstack_vm_host_os_image] is defined
+    fail_msg: |
+      The value '{{ sap_vm_provision_cloudstack_vm_host_os_image }}' of 'sap_vm_provision_cloudstack_vm_host_os_image'
+      is not a key in 'sap_vm_provision_cloudstack_vm_host_os_image_dictionary'.
+
+- name: Assert that each host in the specification plan defines a CloudStack Service Offering
+  ansible.builtin.assert:
+    that:
+      - __host_specification_plan.values() | selectattr('cloudstack_vm_service_offering', 'defined') | list | length
+        == __host_specification_plan | length
+    fail_msg: >-
+      One or more hosts in plan '{{ sap_vm_provision_host_specification_plan }}' are missing the key 'cloudstack_vm_service_offering'.
+  vars:
+    __host_specification_plan: "{{ lookup('ansible.builtin.vars', __sap_vm_provision_host_spec_dict_name)[sap_vm_provision_host_specification_plan] }}"
+
+- name: Assert that the High Availability fencing method is valid
+  ansible.builtin.assert:
+    that: sap_vm_provision_cloudstack_ha_fencing_method in ['sbd_devices', 'sbd_linstor_kvm', 'none']
+    fail_msg: |
+      The variable 'sap_vm_provision_cloudstack_ha_fencing_method' is invalid.
+      Available options: sbd_devices, sbd_linstor_kvm, none
+
+- name: Assert that SBD device(s) are defined for fencing method 'sbd_devices'
+  ansible.builtin.assert:
+    that:
+      - sap_vm_provision_cloudstack_ha_sbd_devices is sequence
+      - sap_vm_provision_cloudstack_ha_sbd_devices is not string
+      - sap_vm_provision_cloudstack_ha_sbd_devices | length > 0
+      - sap_vm_provision_cloudstack_ha_sbd_devices | select('search', 'ENTER_STRING_VALUE_HERE') | list | length == 0
+    fail_msg: |
+      High Availability with fencing method 'sbd_devices' requires 'sap_vm_provision_cloudstack_ha_sbd_devices',
+      a list of shared block device paths visible in all cluster VMs (e.g. ['/dev/disk/by-id/scsi-3600...']).
+      Alternatives: 'sbd_linstor_kvm' (KVM with LINSTOR Primary Storage) or 'none' (own STONITH configuration).
+  # Inventory groups are created after provisioning, HA is detected from the host specification plan
+  when:
+    - sap_vm_provision_cloudstack_ha_fencing_method == 'sbd_devices'
+    - __sap_vm_provision_host_dict_plan.values() | map(attribute='sap_host_type', default='')
+        | select('in', ['hana_secondary', 'anydb_secondary', 'nwas_ers']) | list | length > 0
+
+- name: Assert that the SBD disk serial is valid for virtio (max 20 characters)
+  ansible.builtin.assert:
+    that:
+      - sap_vm_provision_cloudstack_ha_sbd_disk_serial | length > 0
+      - sap_vm_provision_cloudstack_ha_sbd_disk_serial | length <= 20
+      - sap_vm_provision_cloudstack_ha_sbd_disk_serial is match('^[A-Za-z0-9_-]+$')
+    fail_msg: |
+      The variable 'sap_vm_provision_cloudstack_ha_sbd_disk_serial' must be 1-20 characters [A-Za-z0-9_-].
+  when: sap_vm_provision_cloudstack_ha_fencing_method == 'sbd_linstor_kvm'

@@ -31,10 +31,10 @@
           - sap_vm_provision_iac_platform is defined
           - sap_vm_provision_iac_platform is string
           - sap_vm_provision_iac_platform in
-            ['aws_ec2_vs', 'gcp_ce_vm', 'msazure_vm', 'ibmcloud_powervs', 'ibmcloud_vs', 'ibmpowervm_vm', 'kubevirt_vm', 'ovirt_vm', 'vmware_vm']
+            ['aws_ec2_vs', 'gcp_ce_vm', 'msazure_vm', 'ibmcloud_powervs', 'ibmcloud_vs', 'ibmpowervm_vm', 'kubevirt_vm', 'ovirt_vm', 'vmware_vm', 'cloudstack_vm']
         fail_msg: |
           The variable 'sap_vm_provision_iac_platform' is undefined or invalid.
-          Available options: aws_ec2_vs, gcp_ce_vm, msazure_vm, ibmcloud_powervs, ibmcloud_vs, ibmpowervm_vm, kubevirt_vm, ovirt_vm, vmware_vm
+          Available options: aws_ec2_vs, gcp_ce_vm, msazure_vm, ibmcloud_powervs, ibmcloud_vs, ibmpowervm_vm, kubevirt_vm, ovirt_vm, vmware_vm, cloudstack_vm
 
 
     # Host spec dictionary

@@ -1,0 +1,216 @@
+# SPDX-License-Identifier: Apache-2.0
+---
+
+# When SAP HANA Scale-Out is used, if host name is not in original specifications then strip suffix node number from host name
+- name: SAP VM Provision - CloudStack - Set fact when performing SAP HANA Scale-Out
+  ansible.builtin.set_fact:
+    __sap_vm_provision_fact_scaleout_origin_hostname: "{{ inventory_hostname | regex_replace('^(.+?)\\d*$', '\\1') }}"
+  when:
+    - sap_vm_provision_calculate_sap_hana_scaleout_active_coordinator is defined
+    - not inventory_hostname in __sap_vm_provision_host_dict_plan.keys()
+
+
+- name: SAP VM Provision - CloudStack - Ensure SSH Key Pair is registered
+  ngine_io.cloudstack.ssh_key:
+    name: "{{ sap_vm_provision_cloudstack_vm_ssh_keypair_name }}"
+    public_key: "{{ lookup('ansible.builtin.file', sap_vm_provision_ssh_host_public_key_file_path) }}"
+    domain: "{{ sap_vm_provision_cloudstack_domain | d('', true) or omit }}"
+    account: "{{ sap_vm_provision_cloudstack_account | d('', true) or omit }}"
+    project: "{{ sap_vm_provision_cloudstack_project | d('', true) or omit }}"
+    state: present
+  run_once: true
+  register: __sap_vm_provision_register_cloudstack_ssh_key
+  no_log: "{{ __sap_vm_provision_no_log }}"
+
+- name: SAP VM Provision - CloudStack - Ensure Host Anti-Affinity group exists
+  ngine_io.cloudstack.affinity_group:
+    name: "{{ sap_vm_provision_cloudstack_vm_affinity_group_name }}"
+    affinity_type: host anti-affinity
+    description: "Ansible Playbooks for SAP - spread VMs across hypervisor hosts"
+    domain: "{{ sap_vm_provision_cloudstack_domain | d('', true) or omit }}"
+    account: "{{ sap_vm_provision_cloudstack_account | d('', true) or omit }}"
+    project: "{{ sap_vm_provision_cloudstack_project | d('', true) or omit }}"
+    state: present
+  run_once: true
+  register: __sap_vm_provision_register_cloudstack_affinity_group
+  no_log: "{{ __sap_vm_provision_no_log }}"
+  when: sap_vm_provision_cloudstack_vm_affinity_group_name | d('') | length > 0
+
+
+- name: SAP VM Provision - CloudStack - Check if VM exists
+  ngine_io.cloudstack.instance_info:
+    name: "{{ inventory_hostname }}"
+    domain: "{{ sap_vm_provision_cloudstack_domain | d('', true) or omit }}"
+    account: "{{ sap_vm_provision_cloudstack_account | d('', true) or omit }}"
+    project: "{{ sap_vm_provision_cloudstack_project | d('', true) or omit }}"
+  register: __sap_vm_provision_register_provision_host_single_check_exists
+  # The module fails when a named instance does not exist, which is expected before provisioning
+  failed_when:
+    - __sap_vm_provision_register_provision_host_single_check_exists.msg | d('') is not search('Instance not found')
+    - __sap_vm_provision_register_provision_host_single_check_exists.instances is not defined
+  no_log: "{{ __sap_vm_provision_no_log }}"
+
+
+# cloud-init user-data: short hostname as required by SAP, root SSH login for Ansible
+- name: SAP VM Provision - CloudStack - Set fact for cloud-init user-data
+  ansible.builtin.set_fact:
+    __sap_vm_provision_fact_cloudstack_user_data: |
+      #cloud-config
+      hostname: {{ inventory_hostname_short }}
+      fqdn: {{ inventory_hostname_short }}.{{ sap_vm_provision_dns_root_domain }}
+      prefer_fqdn_over_hostname: false
+      preserve_hostname: false
+      manage_etc_hosts: false
+      disable_root: false
+      ssh_pwauth: false
+      ssh_authorized_keys:
+        - {{ lookup('ansible.builtin.file', sap_vm_provision_ssh_host_public_key_file_path) }}
+      {{ sap_vm_provision_cloudstack_vm_user_data_extra | d('') }}
+
+
+- name: SAP VM Provision - CloudStack - Provision Apache CloudStack Virtual Machine
+  ngine_io.cloudstack.instance:
+    name: "{{ inventory_hostname }}"
+    display_name: "{{ inventory_hostname }}"
+    zone: "{{ sap_vm_provision_cloudstack_zone }}"
+    domain: "{{ sap_vm_provision_cloudstack_domain | d('', true) or omit }}"
+    account: "{{ sap_vm_provision_cloudstack_account | d('', true) or omit }}"
+    project: "{{ sap_vm_provision_cloudstack_project | d('', true) or omit }}"
+    template: "{{ sap_vm_provision_cloudstack_vm_host_os_image_dictionary[sap_vm_provision_cloudstack_vm_host_os_image] }}"
+    hypervisor: "{{ sap_vm_provision_cloudstack_vm_hypervisor | d('', true) or omit }}"
+    service_offering: "{{ __sap_vm_provision_host_dict_spec.cloudstack_vm_service_offering }}"
+    cpu: "{{ __sap_vm_provision_host_dict_spec.cloudstack_vm_cpu | d(omit) }}"
+    memory: "{{ __sap_vm_provision_host_dict_spec.cloudstack_vm_memory_mib | d(omit) }}"
+    root_disk_size: "{{ (__sap_vm_provision_host_dict_spec.cloudstack_vm_root_disk_size_gb
+      | d(sap_vm_provision_cloudstack_vm_root_disk_size_gb)) | int or omit }}"
+    networks:
+      - "{{ sap_vm_provision_cloudstack_network_name }}"
+    ip_address: "{{ __sap_vm_provision_host_dict_spec.cloudstack_vm_ip_address | d(omit) }}"
+    ssh_keys:
+      - "{{ sap_vm_provision_cloudstack_vm_ssh_keypair_name }}"
+    affinity_groups: "{{ [sap_vm_provision_cloudstack_vm_affinity_group_name]
+      if sap_vm_provision_cloudstack_vm_affinity_group_name | d('') | length > 0 else omit }}"
+    host: "{{ __sap_vm_provision_host_dict_spec.cloudstack_vm_host | d(omit) }}"
+    user_data: "{{ __sap_vm_provision_fact_cloudstack_user_data
+      if __sap_vm_provision_register_provision_host_single_check_exists.instances | d([]) | length == 0 else omit }}"
+    tags:
+      - key: sap_vm_provision
+        value: "{{ sap_vm_provision_host_specification_plan }}"
+      - key: sap_host_type
+        value: "{{ __sap_vm_provision_host_dict_spec.sap_host_type }}"
+    state: started
+  register: __sap_vm_provision_register_provision_host_single
+  no_log: "{{ __sap_vm_provision_no_log }}"
+
+
+- name: SAP VM Provision - CloudStack - Create fact for delegate host IP
+  ansible.builtin.set_fact:
+    __sap_vm_provision_fact_private_ip: "{{ __sap_vm_provision_register_provision_host_single.default_ip }}"
+
+
+- name: SAP VM Provision - CloudStack - Wait for SSH port on the VM
+  ansible.builtin.wait_for:
+    host: "{{ __sap_vm_provision_fact_private_ip }}"
+    port: 22
+    timeout: 900
+    search_regex: OpenSSH
+  when: not sap_vm_provision_bastion_execution
+
+# Executed with the ssh client on the execution host: Ansible does not retry tasks of unreachable hosts,
+# and SSH accepts connections before cloud-init has injected the root SSH key from the CloudStack metadata.
+- name: SAP VM Provision - CloudStack - Wait for cloud-init to finish (root SSH login via injected key)
+  ansible.builtin.shell:
+    cmd: >-
+      ssh -i '{{ sap_vm_provision_ssh_host_private_key_file_path }}'
+      -o BatchMode=yes -o ConnectTimeout=10
+      {{ sap_vm_provision_ssh_host_ssh_args }} {{ __sap_vm_provision_fact_ssh_args_bastion | d('') }}
+      root@{{ __sap_vm_provision_fact_private_ip }} 'cloud-init status --wait --long'
+  register: __sap_vm_provision_register_cloudstack_cloud_init
+  changed_when: false
+  # rc 2 = cloud-init finished with recoverable errors, rc 255 = SSH connection/authentication failure
+  failed_when: false
+  until: __sap_vm_provision_register_cloudstack_cloud_init.rc in [0, 2]
+  retries: 60
+  delay: 10
+
+- name: SAP VM Provision - CloudStack - Fail if VM is not reachable with SSH as root
+  ansible.builtin.fail:
+    msg: |
+      The VM {{ inventory_hostname }} ({{ __sap_vm_provision_fact_private_ip }}) is not reachable with SSH as root
+      using '{{ sap_vm_provision_ssh_host_private_key_file_path }}', or cloud-init failed.
+      Verify the template contains cloud-init with the CloudStack datasource (DNS name 'data-server' or DHCP lease
+      of the Virtual Router) and that the Guest Network provides the UserData service.
+      {{ __sap_vm_provision_register_cloudstack_cloud_init.stderr | d('') }}
+  when: __sap_vm_provision_register_cloudstack_cloud_init.rc not in [0, 2]
+
+- name: SAP VM Provision - CloudStack - Assert cloud-init used the CloudStack datasource
+  ansible.builtin.assert:
+    that: __sap_vm_provision_register_cloudstack_cloud_init.stdout is search('DataSourceCloudStack')
+    fail_msg: |
+      cloud-init on {{ inventory_hostname }} did not use the CloudStack datasource:
+      {{ __sap_vm_provision_register_cloudstack_cloud_init.stdout }}
+    quiet: true
+
+
+# Combination of only the filesystem volume information from the host_specifications_dictionary.
+# Device names are not predetermined, sap_storage_setup matches the volumes by disk size.
+- name: SAP VM Provision - CloudStack - Set fact for data volumes
+  ansible.builtin.set_fact:
+    __sap_vm_provision_fact_filesystem_volume_map: |
+      {% set volume_map = [] -%}
+      {% for storage_item in __sap_vm_provision_host_dict_spec.storage_definition | d([]) -%}
+        {% for idx in range(0, storage_item.disk_count | d(1)) -%}
+          {% if (storage_item.filesystem_type is defined) -%}
+            {% if ('swap' in storage_item.filesystem_type and storage_item.swap_path is not defined)
+            or ('swap' not in storage_item.filesystem_type and storage_item.nfs_path is not defined) -%}
+              {% set vol = volume_map.extend([
+              {
+                'definition_key': storage_item.name,
+                'fstype': storage_item.filesystem_type | d('xfs'),
+                'name': storage_item.name + idx | string,
+                'size': storage_item.disk_size | d(0) | int,
+                'disk_offering': storage_item.disk_offering | d(sap_vm_provision_cloudstack_vm_disk_offering)
+              }
+              ]) %}
+            {%- endif %}
+          {%- endif %}
+        {%- endfor %}
+      {%- endfor %}
+      {{ volume_map }}
+
+
+- name: SAP VM Provision - CloudStack - Provision and attach data volumes for VM filesystems
+  ngine_io.cloudstack.volume:
+    name: "{{ inventory_hostname }}-vol_{{ vol_item.name }}"
+    zone: "{{ sap_vm_provision_cloudstack_zone }}"
+    domain: "{{ sap_vm_provision_cloudstack_domain | d('', true) or omit }}"
+    account: "{{ sap_vm_provision_cloudstack_account | d('', true) or omit }}"
+    project: "{{ sap_vm_provision_cloudstack_project | d('', true) or omit }}"
+    disk_offering: "{{ vol_item.disk_offering }}"
+    size: "{{ vol_item.size }}"
+    vm: "{{ inventory_hostname }}"
+    state: attached
+  loop: "{{ __sap_vm_provision_fact_filesystem_volume_map }}"
+  loop_control:
+    loop_var: vol_item
+    label: "{{ vol_item.definition_key }}: {{ vol_item.name }} (size: {{ vol_item.size }} GB)"
+  register: __sap_vm_provision_register_provision_host_single_volumes
+  no_log: "{{ __sap_vm_provision_no_log }}"
+  when:
+    - vol_item.fstype is defined
+    - vol_item.size > 0
+
+
+- name: SAP VM Provision - CloudStack - Combine details of provisioned hosts into one list
+  ansible.builtin.set_fact:
+    __sap_vm_provision_fact_provisioned_hosts: "{{ __sap_vm_provision_fact_provisioned_hosts + [__merged_results] }}"
+    __sap_vm_provision_fact_cloudstack_kvm_host: "{{ __sap_vm_provision_register_provision_host_single.host | d('') }}"
+    __sap_vm_provision_fact_cloudstack_instance_name: "{{ __sap_vm_provision_register_provision_host_single.instance_name | d('') }}"
+    __sap_vm_provision_fact_cloudstack_hypervisor: "{{ __sap_vm_provision_register_provision_host_single.hypervisor | d('') }}"
+  # Append keys to provisioning result, that are not part of default return dictionary.
+  vars:
+    __merged_results:
+      "{{ __sap_vm_provision_register_provision_host_single
+        | combine({'host_node': inventory_hostname},
+        {'sap_host_type': __sap_vm_provision_host_dict_spec.sap_host_type},
+        {'sap_system_type': (__sap_vm_provision_host_dict_spec.sap_system_type | d(''))}) }}"

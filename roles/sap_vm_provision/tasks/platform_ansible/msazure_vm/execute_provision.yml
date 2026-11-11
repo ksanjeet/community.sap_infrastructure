@@ -43,19 +43,19 @@
   register: __sap_vm_provision_register_provision_host_single_vnic
   no_log: "{{ __sap_vm_provision_no_log }}"
   vars:
-    __availability_set: "{{ (
-      (__sap_vm_provision_register_msazure_availability_set.results | selectattr('item','==','hana'))[0].state.name
-      if (sap_vm_provision_group_hana_primary in __sap_vm_provision_host_dict_spec.sap_host_type
-        or sap_vm_provision_group_hana_secondary in __sap_vm_provision_host_dict_spec.sap_host_type)
-      else
-      (__sap_vm_provision_register_msazure_availability_set.results | selectattr('item','==','anydb'))[0].state.name
-      if (sap_vm_provision_group_anydb_primary in __sap_vm_provision_host_dict_spec.sap_host_type
-        or sap_vm_provision_group_anydb_secondary in __sap_vm_provision_host_dict_spec.sap_host_type)
-      else
-      (__sap_vm_provision_register_msazure_availability_set.results | selectattr('item','==','nwas'))[0].state.name
-      if (sap_vm_provision_group_nwas_ascs in __sap_vm_provision_host_dict_spec.sap_host_type
-        or sap_vm_provision_group_nwas_ers in __sap_vm_provision_host_dict_spec.sap_host_type)
-      ) | d(omit) }}"
+    # Availability Sets are created only when 'sap_vm_provision_msazure_placement_strategy_spread' is true,
+    # results of the looped task are keyed by the loop variable 'placement_item'.
+    __availability_set_by_type: >-
+      {{ dict(__sap_vm_provision_register_msazure_availability_set.results | d([])
+         | selectattr('state', 'defined') | map(attribute='placement_item')
+         | zip(__sap_vm_provision_register_msazure_availability_set.results | d([])
+           | selectattr('state', 'defined') | map(attribute='state.name'))) }}
+    __availability_set_type: >-
+      {{ 'hana' if __sap_vm_provision_host_dict_spec.sap_host_type in [sap_vm_provision_group_hana_primary, sap_vm_provision_group_hana_secondary]
+         else 'anydb' if __sap_vm_provision_host_dict_spec.sap_host_type in [sap_vm_provision_group_anydb_primary, sap_vm_provision_group_anydb_secondary]
+         else 'nwas' if __sap_vm_provision_host_dict_spec.sap_host_type in [sap_vm_provision_group_nwas_ascs, sap_vm_provision_group_nwas_ers]
+         else '' }}
+    __availability_set: "{{ __availability_set_by_type[__availability_set_type] | d(omit) }}"
   when: __sap_vm_provision_register_provision_host_single_vnic_info.networkinterfaces | length == 0
 
 - name: SAP VM Provision - Azure - Provision MS Azure VM

@@ -1,128 +1,141 @@
 # SPDX-License-Identifier: Apache-2.0
 ---
 
-- name: SAP VM Provision - Azure - IAM Role - Prepare IAM Role name
-  ansible.builtin.set_fact:
-    __sap_vm_provision_fact_msazure_ha_iam_role:
-      "{{ sap_vm_provision_msazure_ha_iam_role
-       if sap_vm_provision_msazure_ha_iam_role | d('') | length > 0
-       else 'Linux Fence Agent Role' }}"
+# Fencing method 'fence_azure_arm': custom IAM role for the Azure Fence Agent assigned to the VM Managed Service Identity
+- name: Block for IAM role of the Azure Fence Agent
+  when: sap_vm_provision_msazure_ha_fencing_method | d('fence_azure_arm') == 'fence_azure_arm'
+  block:
 
-- name: SAP VM Provision - Azure - IAM Role - Definition
-  azure.azcollection.azure_rm_roledefinition:
-    name: "{{ __sap_vm_provision_fact_msazure_ha_iam_role }}"
-    description: "Allows to power-off and start virtual machines"
-    # scope: /subscriptions/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/resourceGroups/myresourceGroup
-    assignable_scopes:
-      - "/subscriptions/{{ sap_vm_provision_msazure_subscription_id }}"
-    permissions:
-      - actions:
-          - "Microsoft.Compute/*/read"
-          - "Microsoft.Compute/virtualMachines/powerOff/action"
-          - "Microsoft.Compute/virtualMachines/start/action"
-      # - data_actions:
-      # - not_actions:
-      # - not_data_actions:
-    state: present
-    subscription_id: "{{ sap_vm_provision_msazure_subscription_id }}"
-    tenant: "{{ sap_vm_provision_msazure_tenant_id }}"
-    client_id: "{{ sap_vm_provision_msazure_app_client_id }}"
-    secret: "{{ sap_vm_provision_msazure_app_client_secret }}"
-  register: __sap_vm_provision_register_msazure_iam_role_fencing
-  no_log: "{{ __sap_vm_provision_no_log }}"
-  # Custom Role can exist within different Subscriptions under same tenant
-  # Described in: https://github.com/Azure/azure-powershell/issues/4365#issuecomment-351171763
-  # Error is ignored and validated in next step
-  ignore_errors: true
+    - name: SAP VM Provision - Azure - IAM Role - Prepare IAM Role name
+      ansible.builtin.set_fact:
+        __sap_vm_provision_fact_msazure_ha_iam_role:
+          "{{ sap_vm_provision_msazure_ha_iam_role
+           if sap_vm_provision_msazure_ha_iam_role | d('') | length > 0
+           else 'Linux Fence Agent Role' }}"
 
-  # Second attempt to create Role with last segment of Subscription ID
-- name: SAP VM Provision - Azure - IAM Role - Definition Subscription specific
-  azure.azcollection.azure_rm_roledefinition:
-    name: "{{ __sap_vm_provision_fact_msazure_ha_iam_role }} {{ sap_vm_provision_msazure_subscription_id.split('-')[-1] }}"
-    description: "Allows to power-off and start virtual machines {{ sap_vm_provision_msazure_subscription_id.split('-')[-1] }}"
-    assignable_scopes:
-      - "/subscriptions/{{ sap_vm_provision_msazure_subscription_id }}"
-    permissions:
-      - actions:
-          - "Microsoft.Compute/*/read"
-          - "Microsoft.Compute/virtualMachines/powerOff/action"
-          - "Microsoft.Compute/virtualMachines/start/action"
-      # - data_actions:
-      # - not_actions:
-      # - not_data_actions:
-    state: present
-    subscription_id: "{{ sap_vm_provision_msazure_subscription_id }}"
-    tenant: "{{ sap_vm_provision_msazure_tenant_id }}"
-    client_id: "{{ sap_vm_provision_msazure_app_client_id }}"
-    secret: "{{ sap_vm_provision_msazure_app_client_secret }}"
-  register: __sap_vm_provision_register_msazure_iam_role_fencing_sub
-  no_log: "{{ __sap_vm_provision_no_log }}"
-  when:
-    - __sap_vm_provision_register_msazure_iam_role_fencing is defined
-    - __sap_vm_provision_register_msazure_iam_role_fencing.failed
+    - name: SAP VM Provision - Azure - IAM Role - Definition
+      azure.azcollection.azure_rm_roledefinition:
+        name: "{{ __sap_vm_provision_fact_msazure_ha_iam_role }}"
+        description: "Allows to power-off and start virtual machines"
+        # scope: /subscriptions/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/resourceGroups/myresourceGroup
+        assignable_scopes:
+          - "/subscriptions/{{ sap_vm_provision_msazure_subscription_id }}"
+        permissions:
+          - actions:
+              - "Microsoft.Compute/*/read"
+              - "Microsoft.Compute/virtualMachines/powerOff/action"
+              - "Microsoft.Compute/virtualMachines/start/action"
+          # - data_actions:
+          # - not_actions:
+          # - not_data_actions:
+        state: present
+        subscription_id: "{{ sap_vm_provision_msazure_subscription_id }}"
+        tenant: "{{ sap_vm_provision_msazure_tenant_id }}"
+        client_id: "{{ sap_vm_provision_msazure_app_client_id }}"
+        secret: "{{ sap_vm_provision_msazure_app_client_secret }}"
+      register: __sap_vm_provision_register_msazure_iam_role_fencing
+      no_log: "{{ __sap_vm_provision_no_log }}"
+      # Custom Role can exist within different Subscriptions under same tenant
+      # Described in: https://github.com/Azure/azure-powershell/issues/4365#issuecomment-351171763
+      # Error is ignored and validated in next step
+      ignore_errors: true
 
-- name: SAP VM Provision - Azure - GenericRestClient call to Virtual Machine API to identify Managed Service Identity (MSI)
-  azure.azcollection.azure_rm_resource_info:
-    resource_group: "{{ sap_vm_provision_msazure_resource_group_name }}"
-    provider: Compute
-    resource_type: virtualMachines
-    resource_name: "{{ host_node }}"
-    subscription_id: "{{ sap_vm_provision_msazure_subscription_id }}"
-    tenant: "{{ sap_vm_provision_msazure_tenant_id }}"
-    client_id: "{{ sap_vm_provision_msazure_app_client_id }}"
-    secret: "{{ sap_vm_provision_msazure_app_client_secret }}"
-  loop: "{{ __sap_vm_provision_fact_merged_hosts_list }}"
-  loop_control:
-    loop_var: host_node
-  register: __sap_vm_provision_register_msazure_vm_info_collect
-  no_log: "{{ __sap_vm_provision_no_log }}"
+      # Second attempt to create Role with last segment of Subscription ID
+    - name: SAP VM Provision - Azure - IAM Role - Definition Subscription specific
+      azure.azcollection.azure_rm_roledefinition:
+        name: "{{ __sap_vm_provision_fact_msazure_ha_iam_role }} {{ sap_vm_provision_msazure_subscription_id.split('-')[-1] }}"
+        description: "Allows to power-off and start virtual machines {{ sap_vm_provision_msazure_subscription_id.split('-')[-1] }}"
+        assignable_scopes:
+          - "/subscriptions/{{ sap_vm_provision_msazure_subscription_id }}"
+        permissions:
+          - actions:
+              - "Microsoft.Compute/*/read"
+              - "Microsoft.Compute/virtualMachines/powerOff/action"
+              - "Microsoft.Compute/virtualMachines/start/action"
+          # - data_actions:
+          # - not_actions:
+          # - not_data_actions:
+        state: present
+        subscription_id: "{{ sap_vm_provision_msazure_subscription_id }}"
+        tenant: "{{ sap_vm_provision_msazure_tenant_id }}"
+        client_id: "{{ sap_vm_provision_msazure_app_client_id }}"
+        secret: "{{ sap_vm_provision_msazure_app_client_secret }}"
+      register: __sap_vm_provision_register_msazure_iam_role_fencing_sub
+      no_log: "{{ __sap_vm_provision_no_log }}"
+      when:
+        - __sap_vm_provision_register_msazure_iam_role_fencing is defined
+        - __sap_vm_provision_register_msazure_iam_role_fencing.failed
 
-# Assign to the MSI Object ID (Service Principal ID)
-- name: SAP VM Provision - Azure - IAM Role - Assignment to MS Azure Managed Service Identity (MSI)
-  azure.azcollection.azure_rm_roleassignment:
-    # auth_source: msi
-    role_definition_id:
-      "{{ __sap_vm_provision_register_msazure_iam_role_fencing.id
-        if __sap_vm_provision_register_msazure_iam_role_fencing.id is defined
-        else __sap_vm_provision_register_msazure_iam_role_fencing_sub.id }}"
-    scope: "/subscriptions/{{ sap_vm_provision_msazure_subscription_id }}"
-    assignee_object_id: "{{ host_node.response[0].identity.principalId | d(none) }}"
-    subscription_id: "{{ sap_vm_provision_msazure_subscription_id }}"
-    tenant: "{{ sap_vm_provision_msazure_tenant_id }}"
-    client_id: "{{ sap_vm_provision_msazure_app_client_id }}"
-    secret: "{{ sap_vm_provision_msazure_app_client_secret }}"
-  loop: "{{ __sap_vm_provision_register_msazure_vm_info_collect.results }}"
-  loop_control:
-    loop_var: host_node
-    label: "{{ host_node.response[0].name | d(none) }}" # Use default to avoid "Failed to template 'dict object' has no attribute 'response'"
-  register: __sap_vm_provision_register_msazure_iam_role_assignment
-  no_log: "{{ __sap_vm_provision_no_log }}"
+    - name: SAP VM Provision - Azure - GenericRestClient call to Virtual Machine API to identify Managed Service Identity (MSI)
+      azure.azcollection.azure_rm_resource_info:
+        resource_group: "{{ sap_vm_provision_msazure_resource_group_name }}"
+        provider: Compute
+        resource_type: virtualMachines
+        resource_name: "{{ host_node }}"
+        subscription_id: "{{ sap_vm_provision_msazure_subscription_id }}"
+        tenant: "{{ sap_vm_provision_msazure_tenant_id }}"
+        client_id: "{{ sap_vm_provision_msazure_app_client_id }}"
+        secret: "{{ sap_vm_provision_msazure_app_client_secret }}"
+      loop: "{{ __sap_vm_provision_fact_merged_hosts_list }}"
+      loop_control:
+        loop_var: host_node
+      register: __sap_vm_provision_register_msazure_vm_info_collect
+      no_log: "{{ __sap_vm_provision_no_log }}"
+
+    # Assign to the MSI Object ID (Service Principal ID)
+    - name: SAP VM Provision - Azure - IAM Role - Assignment to MS Azure Managed Service Identity (MSI)
+      azure.azcollection.azure_rm_roleassignment:
+        # auth_source: msi
+        role_definition_id:
+          "{{ __sap_vm_provision_register_msazure_iam_role_fencing.id
+            if __sap_vm_provision_register_msazure_iam_role_fencing.id is defined
+            else __sap_vm_provision_register_msazure_iam_role_fencing_sub.id }}"
+        scope: "/subscriptions/{{ sap_vm_provision_msazure_subscription_id }}"
+        assignee_object_id: "{{ host_node.response[0].identity.principalId | d(none) }}"
+        subscription_id: "{{ sap_vm_provision_msazure_subscription_id }}"
+        tenant: "{{ sap_vm_provision_msazure_tenant_id }}"
+        client_id: "{{ sap_vm_provision_msazure_app_client_id }}"
+        secret: "{{ sap_vm_provision_msazure_app_client_secret }}"
+      loop: "{{ __sap_vm_provision_register_msazure_vm_info_collect.results }}"
+      loop_control:
+        loop_var: host_node
+        label: "{{ host_node.response[0].name | d(none) }}" # Use default to avoid "Failed to template 'dict object' has no attribute 'response'"
+      register: __sap_vm_provision_register_msazure_iam_role_assignment
+      no_log: "{{ __sap_vm_provision_no_log }}"
 
 
-# Azure Load Balancer Health Check Probe is the destination port upon connection to the virtual machine to check the virtual machine's health status.
-# Ensure the virtual machine is also listening on this port (that is, the port is open).
-# https://learn.microsoft.com/en-us/azure/load-balancer/manage-probes-how-to
-#
-# As Linux Pacemaker 'azure-lb' Resource Agent is not started before the Load Balancer Rule is created, must instead use a fake health check response
-# Otherwise the Azure Load Balancer Rule will automatically evaluate as all Virtual Machines in the Azure Load Balancer Backend Pool are 'probed DOWN'
-#
-# Note: ICMP ping requests to the Azure Load Balancer Frontend IP (i.e. Virtual IP) are handled by the Azure Load Balancer,
-# the ICMP ping requests are not sent to the Azure Load Balancer Backend Pool virtual machines
-# https://learn.microsoft.com/en-us/azure/load-balancer/load-balancer-test-frontend-reachability#usage-considerations
-#
-# The azure_rm_loadbalancer Ansible Module does not allow backend pool population - https://github.com/ansible-collections/azure/issues/866
-# Must use either workaround:
-# Opt 1. provision Load Balancer first, then assign vNIC at creation to the Load Balancer backend pool. This failed to register healthy VMs.
-# Opt 2. use azure_rm_networkinterface Ansible Module to update-in-place the vNIC and assign to a Load Balancer backend pool.
-# Option selected = Opt 2
-#
-# In addition, the Azure Load Balancer being provisioned before Linux Pacemaker,
-# requires a temporary Health Check Probe port to be used with an an active OS service listening.
-# Therefore the Health Check Port probe will use Port 55550/55551/55552 during initial installation,
-# and be switched after the SAP Installation and Linux Pacemaker installation to the correct port number.
-# This is because an Azure Load Balancer Rule will trigger the Health Check Probe once any host is added to the Backend Pool,
-# and if the host is not listening on the port it will fail, which will mark the resource as unhealthy,
-# the traffic will not be routed to the host and if all hosts fail then the Frontend IP will also fail / not respond to ICMP Ping requests.
+    # Azure Load Balancer Health Check Probe is the destination port upon connection to the virtual machine to check the virtual machine's health status.
+    # Ensure the virtual machine is also listening on this port (that is, the port is open).
+    # https://learn.microsoft.com/en-us/azure/load-balancer/manage-probes-how-to
+    #
+    # As Linux Pacemaker 'azure-lb' Resource Agent is not started before the Load Balancer Rule is created, must instead use a fake health check response
+    # Otherwise the Azure Load Balancer Rule will automatically evaluate as all Virtual Machines in the Azure Load Balancer Backend Pool are 'probed DOWN'
+    #
+    # Note: ICMP ping requests to the Azure Load Balancer Frontend IP (i.e. Virtual IP) are handled by the Azure Load Balancer,
+    # the ICMP ping requests are not sent to the Azure Load Balancer Backend Pool virtual machines
+    # https://learn.microsoft.com/en-us/azure/load-balancer/load-balancer-test-frontend-reachability#usage-considerations
+    #
+    # The azure_rm_loadbalancer Ansible Module does not allow backend pool population - https://github.com/ansible-collections/azure/issues/866
+    # Must use either workaround:
+    # Opt 1. provision Load Balancer first, then assign vNIC at creation to the Load Balancer backend pool. This failed to register healthy VMs.
+    # Opt 2. use azure_rm_networkinterface Ansible Module to update-in-place the vNIC and assign to a Load Balancer backend pool.
+    # Option selected = Opt 2
+    #
+    # In addition, the Azure Load Balancer being provisioned before Linux Pacemaker,
+    # requires a temporary Health Check Probe port to be used with an an active OS service listening.
+    # Therefore the Health Check Port probe will use Port 55550/55551/55552 during initial installation,
+    # and be switched after the SAP Installation and Linux Pacemaker installation to the correct port number.
+    # This is because an Azure Load Balancer Rule will trigger the Health Check Probe once any host is added to the Backend Pool,
+    # and if the host is not listening on the port it will fail, which will mark the resource as unhealthy,
+    # the traffic will not be routed to the host and if all hosts fail then the Frontend IP will also fail / not respond to ICMP Ping requests.
+
+
+# Fencing method 'sbd_shared_disk': SBD on Azure shared disk, no IAM role required
+- name: SAP VM Provision - Azure - SBD shared disk for High Availability clusters
+  ansible.builtin.include_tasks:
+    file: "{{ __sap_vm_provision_task_file }}/execute_setup_ha_sbd.yml"
+  when: sap_vm_provision_msazure_ha_fencing_method | d('fence_azure_arm') == 'sbd_shared_disk'
+
 
 - name: Block for Shared High Availability pre-tasks
   delegate_to: "{{ sap_vm_provision_execution_host }}"

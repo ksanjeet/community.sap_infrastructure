@@ -60,9 +60,10 @@
         mode: '0644'
       when: sap_vm_provision_os_registration_ca_file_path | d('') | length > 0
 
+    # SLES provides update-ca-certificates only (update-ca-trust is RHEL), the command module does not support '&&'
     - name: SAP VM Provision - Register OS - SUSE Package Repositories - Update CA trust
       ansible.builtin.command:
-        cmd: update-ca-trust && update-ca-certificates
+        cmd: update-ca-certificates
       changed_when: true
 
     # Reason for noqa: Ensures that environment variables are used.

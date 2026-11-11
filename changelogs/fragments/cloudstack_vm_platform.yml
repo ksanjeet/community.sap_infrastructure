@@ -1,0 +1,12 @@
+---
+major_changes:
+  - sap_vm_provision - Add Apache CloudStack platform ``cloudstack_vm`` (``sap_vm_provision_iac_type`` ``ansible``) using the ngine_io.cloudstack collection, with any hypervisor and Primary Storage, and High Availability fencing methods ``sbd_devices``, ``sbd_linstor_kvm`` and ``none``.
+minor_changes:
+  - sap_vm_provision - MS Azure - Add fencing method ``sbd_shared_disk`` (``sap_vm_provision_msazure_ha_fencing_method``) using an Azure shared disk, no IAM role assignment required. Default remains ``fence_azure_arm``.
+  - sap_vm_provision - Configure ``/etc/sysconfig/proxy`` on SUSE hosts when ``sap_vm_provision_proxy_web_forward_proxy_ip`` is set, so zypper uses the proxy.
+  - sap_vm_provision - MS Azure - Apply web forward proxy settings and re-register SUSE PAYG images without repositories through the proxy.
+bugfixes:
+  - sap_vm_provision - MS Azure - Fix Availability Set lookup, which failed when ``sap_vm_provision_msazure_placement_strategy_spread`` is false (default) and when it is true.
+  - sap_vm_provision - MS Azure - Use ``sap_vm_provision_msazure_resource_group_name`` when ``sap_vm_provision_msazure_private_dns_resource_group_name`` is an empty string.
+  - sap_vm_provision - Use ``update-ca-certificates`` for SUSE RMT CA files (``update-ca-trust`` is not available on SLES and the command module does not support ``&&``).
+  - sap_vm_provision - Proxy setup for RHEL targets failed on platforms other than IBM Power Virtual Server.

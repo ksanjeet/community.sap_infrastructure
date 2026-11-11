@@ -12,7 +12,7 @@
       azure.azcollection.azure_rm_privatednsrecordset:
         # DNS may exist in separate Resource Group. Use empty string var
         # (or default false if undefined) to evaluate to false boolean, and use Python or logic operator
-        resource_group: "{{ (sap_vm_provision_msazure_private_dns_resource_group_name | d(sap_vm_provision_msazure_resource_group_name)) }}"
+        resource_group: "{{ (sap_vm_provision_msazure_private_dns_resource_group_name | d(sap_vm_provision_msazure_resource_group_name, true)) }}"
         zone_name: "{{ hostvars[host_node].sap_vm_provision_dns_root_domain }}"
         relative_name: "{{ __sap_vm_provision_fact_ha_hostname_hana_primary }}"
         record_type: A

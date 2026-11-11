@@ -1,0 +1,143 @@
+# SPDX-License-Identifier: Apache-2.0
+---
+
+# SBD shared disk for one HA cluster (loop variable 'cluster_item' with keys 'name' and 'hosts')
+# - LINSTOR resource (DRBD) with allow-two-primaries, spawned from the resource group of CloudStack Linstor Primary Storage
+# - Made available (diskful or diskless) on every KVM host running a cluster VM
+# - Attached to each running KVM domain as shareable raw virtio disk with a fixed serial,
+#   visible in the guest as /dev/disk/by-id/virtio-<serial>
+
+- name: SAP VM Provision - CloudStack - HA SBD - Set facts for cluster '{{ cluster_item.name }}'
+  ansible.builtin.set_fact:
+    __sap_vm_provision_fact_cloudstack_sbd_resource: >-
+      {{ sap_vm_provision_cloudstack_ha_sbd_linstor_resource_prefix }}-{{ cluster_item.hosts | first | regex_replace('[^A-Za-z0-9_-]', '-') }}
+    __sap_vm_provision_fact_cloudstack_sbd_vms: |
+      {% set result = [] %}
+      {% for host in cluster_item.hosts %}
+      {%   set kvm = hostvars[host].__sap_vm_provision_fact_cloudstack_kvm_host %}
+      {%   set _ = result.append({
+             'host': host,
+             'kvm_host': kvm,
+             'kvm_inventory_host': 'cloudstack_kvm_' ~ kvm,
+             'linstor_node': __sap_vm_provision_fact_cloudstack_kvm_host_map[kvm].linstor_node,
+             'instance_name': hostvars[host].__sap_vm_provision_fact_cloudstack_instance_name}) %}
+      {% endfor %}
+      {{ result }}
+
+
+- name: SAP VM Provision - CloudStack - HA SBD - Check LINSTOR resource definition
+  ansible.builtin.uri:
+    url: "{{ __sap_vm_provision_fact_cloudstack_linstor_api_url }}/v1/resource-definitions/{{ __sap_vm_provision_fact_cloudstack_sbd_resource }}"
+    method: GET
+    validate_certs: "{{ sap_vm_provision_cloudstack_ha_sbd_linstor_api_validate_certs | bool }}"
+    status_code: [200, 404]
+  register: __sap_vm_provision_register_cloudstack_sbd_rd
+
+- name: SAP VM Provision - CloudStack - HA SBD - Spawn LINSTOR resource from resource group
+  ansible.builtin.uri:
+    url: "{{ __sap_vm_provision_fact_cloudstack_linstor_api_url }}/v1/resource-groups/{{ __sap_vm_provision_fact_cloudstack_linstor_resource_group }}/spawn"
+    method: POST
+    body_format: json
+    body:
+      resource_definition_name: "{{ __sap_vm_provision_fact_cloudstack_sbd_resource }}"
+      volume_sizes:
+        - "{{ (sap_vm_provision_cloudstack_ha_sbd_size_mib | int) * 1024 }}" # KiB
+    validate_certs: "{{ sap_vm_provision_cloudstack_ha_sbd_linstor_api_validate_certs | bool }}"
+    status_code: [200, 201]
+  register: __sap_vm_provision_register_cloudstack_sbd_spawn
+  when: __sap_vm_provision_register_cloudstack_sbd_rd.status == 404
+
+- name: SAP VM Provision - CloudStack - HA SBD - Set DRBD options for dual-primary shared disk
+  ansible.builtin.uri:
+    url: "{{ __sap_vm_provision_fact_cloudstack_linstor_api_url }}/v1/resource-definitions/{{ __sap_vm_provision_fact_cloudstack_sbd_resource }}"
+    method: PUT
+    body_format: json
+    body:
+      override_props:
+        DrbdOptions/Net/allow-two-primaries: "yes"
+        DrbdOptions/Resource/quorum: "off"
+        DrbdOptions/Net/after-sb-0pri: discard-zero-changes
+        DrbdOptions/Net/after-sb-1pri: discard-secondary
+        DrbdOptions/Net/after-sb-2pri: disconnect
+        Aux/sap_vm_provision: "{{ cluster_item.hosts | join(',') }}"
+    validate_certs: "{{ sap_vm_provision_cloudstack_ha_sbd_linstor_api_validate_certs | bool }}"
+    status_code: [200, 201]
+
+- name: SAP VM Provision - CloudStack - HA SBD - Make LINSTOR resource available on KVM hosts of cluster VMs
+  ansible.builtin.uri:
+    url: "{{ __sap_vm_provision_fact_cloudstack_linstor_api_url }}/v1/resource-definitions/{{
+      __sap_vm_provision_fact_cloudstack_sbd_resource }}/resources/{{ node_item }}/make-available"
+    method: POST
+    body_format: json
+    body:
+      diskful: false
+    validate_certs: "{{ sap_vm_provision_cloudstack_ha_sbd_linstor_api_validate_certs | bool }}"
+    status_code: [200, 201]
+  loop: "{{ __sap_vm_provision_fact_cloudstack_sbd_vms | map(attribute='linstor_node') | unique | list }}"
+  loop_control:
+    loop_var: node_item
+
+- name: SAP VM Provision - CloudStack - HA SBD - Wait until LINSTOR resource is UpToDate on all nodes
+  ansible.builtin.uri:
+    url: "{{ __sap_vm_provision_fact_cloudstack_linstor_api_url }}/v1/view/resources?resources={{ __sap_vm_provision_fact_cloudstack_sbd_resource }}"
+    method: GET
+    validate_certs: "{{ sap_vm_provision_cloudstack_ha_sbd_linstor_api_validate_certs | bool }}"
+    return_content: true
+  register: __sap_vm_provision_register_cloudstack_sbd_state
+  until:
+    - __sap_vm_provision_register_cloudstack_sbd_state.json | length > 0
+    - __sap_vm_provision_register_cloudstack_sbd_state.json | map(attribute='volumes') | flatten
+        | map(attribute='state') | map(attribute='disk_state', default='Unknown')
+        | reject('in', ['UpToDate', 'Diskless']) | list | length == 0
+  retries: 60
+  delay: 5
+
+
+- name: SAP VM Provision - CloudStack - HA SBD - Wait for DRBD device on KVM hosts
+  delegate_to: "{{ vm_item.kvm_inventory_host }}"
+  ansible.builtin.stat:
+    path: "/dev/drbd/by-res/{{ __sap_vm_provision_fact_cloudstack_sbd_resource }}/0"
+  register: __sap_vm_provision_register_cloudstack_sbd_device
+  until: __sap_vm_provision_register_cloudstack_sbd_device.stat.exists
+  retries: 24
+  delay: 5
+  loop: "{{ __sap_vm_provision_fact_cloudstack_sbd_vms }}"
+  loop_control:
+    loop_var: vm_item
+    label: "{{ vm_item.kvm_host }}"
+
+- name: SAP VM Provision - CloudStack - HA SBD - Check SBD shared disk attachment of KVM domains
+  delegate_to: "{{ vm_item.kvm_inventory_host }}"
+  ansible.builtin.command:
+    cmd: "virsh --connect qemu:///system domblklist {{ vm_item.instance_name }} --details"
+  register: __sap_vm_provision_register_cloudstack_sbd_domblklist
+  changed_when: false
+  loop: "{{ __sap_vm_provision_fact_cloudstack_sbd_vms }}"
+  loop_control:
+    loop_var: vm_item
+    label: "{{ vm_item.host }} ({{ vm_item.instance_name }} on {{ vm_item.kvm_host }})"
+
+- name: SAP VM Provision - CloudStack - HA SBD - Attach SBD shared disk to KVM domains
+  delegate_to: "{{ attach_item.vm_item.kvm_inventory_host }}"
+  ansible.builtin.shell:
+    cmd: |
+      set -o errexit
+      xml_file="$(mktemp --suffix=.xml)"
+      trap 'rm -f "${xml_file}"' EXIT
+      cat > "${xml_file}" <<'EOF'
+      <disk type='block' device='disk'>
+        <driver name='qemu' type='raw' cache='none' io='native' discard='unmap'/>
+        <source dev='/dev/drbd/by-res/{{ __sap_vm_provision_fact_cloudstack_sbd_resource }}/0'/>
+        <target dev='{{ sap_vm_provision_cloudstack_ha_sbd_disk_target }}' bus='virtio'/>
+        <serial>{{ sap_vm_provision_cloudstack_ha_sbd_disk_serial }}</serial>
+        <shareable/>
+      </disk>
+      EOF
+      virsh --connect qemu:///system attach-device {{ attach_item.vm_item.instance_name }} "${xml_file}" --live
+  changed_when: true
+  loop: "{{ __sap_vm_provision_register_cloudstack_sbd_domblklist.results }}"
+  loop_control:
+    loop_var: attach_item
+    label: "{{ attach_item.vm_item.host }} ({{ attach_item.vm_item.instance_name }} on {{ attach_item.vm_item.kvm_host }})"
+  when:
+    - ('/dev/drbd/by-res/' ~ __sap_vm_provision_fact_cloudstack_sbd_resource ~ '/0') not in attach_item.stdout

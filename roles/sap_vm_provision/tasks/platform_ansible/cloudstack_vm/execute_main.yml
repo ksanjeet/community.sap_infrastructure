@@ -1,0 +1,271 @@
+# SPDX-License-Identifier: Apache-2.0
+---
+
+# Apache CloudStack provisioning using Ansible Collection ngine_io.cloudstack
+#
+# API credentials are resolved in order:
+#   1. Ansible variables sap_vm_provision_cloudstack_api_url / _api_key / _api_secret
+#   2. Environment variables CLOUDSTACK_ENDPOINT / CLOUDSTACK_KEY / CLOUDSTACK_SECRET
+#   3. cloudstack.ini section [cloudstack] keys endpoint / key / secret
+#      (file from CLOUDSTACK_CONFIG, ./cloudstack.ini or ~/.cloudstack.ini)
+
+- name: Ansible Task block for looped provisioning of Apache CloudStack Virtual Machines
+  any_errors_fatal: true
+  module_defaults:
+    ngine_io.cloudstack.instance: &cloudstack_api
+      api_url: "{{ __sap_vm_provision_fact_cloudstack_api.url | d(omit) }}"
+      api_key: "{{ __sap_vm_provision_fact_cloudstack_api.key | d(omit) }}"
+      api_secret: "{{ __sap_vm_provision_fact_cloudstack_api.secret | d(omit) }}"
+      api_timeout: "{{ sap_vm_provision_cloudstack_api_timeout }}"
+      validate_certs: "{{ sap_vm_provision_cloudstack_api_verify_ssl_cert | bool }}"
+      api_http_method: post
+    ngine_io.cloudstack.instance_info: *cloudstack_api
+    ngine_io.cloudstack.volume: *cloudstack_api
+    ngine_io.cloudstack.ssh_key: *cloudstack_api
+    ngine_io.cloudstack.affinity_group: *cloudstack_api
+    ngine_io.cloudstack.instance_nic_secondaryip: *cloudstack_api
+    ngine_io.cloudstack.api_request: *cloudstack_api
+  block:
+
+    - name: SAP VM Provision - CloudStack - Resolve API credentials
+      ansible.builtin.set_fact:
+        __sap_vm_provision_fact_cloudstack_api:
+          url: "{{ sap_vm_provision_cloudstack_api_url | d('', true)
+            or lookup('ansible.builtin.env', 'CLOUDSTACK_ENDPOINT')
+            or (lookup('ansible.builtin.ini', 'endpoint', section='cloudstack', file=__cloudstack_ini, default='')
+              if __cloudstack_ini | length > 0 else '') }}"
+          key: "{{ sap_vm_provision_cloudstack_api_key | d('', true)
+            or lookup('ansible.builtin.env', 'CLOUDSTACK_KEY')
+            or (lookup('ansible.builtin.ini', 'key', section='cloudstack', file=__cloudstack_ini, default='')
+              if __cloudstack_ini | length > 0 else '') }}"
+          secret: "{{ sap_vm_provision_cloudstack_api_secret | d('', true)
+            or lookup('ansible.builtin.env', 'CLOUDSTACK_SECRET')
+            or (lookup('ansible.builtin.ini', 'secret', section='cloudstack', file=__cloudstack_ini, default='')
+              if __cloudstack_ini | length > 0 else '') }}"
+      vars:
+        __cloudstack_ini_candidates:
+          - "{{ lookup('ansible.builtin.env', 'CLOUDSTACK_CONFIG') }}"
+          - "{{ playbook_dir }}/cloudstack.ini"
+          - "{{ lookup('ansible.builtin.env', 'HOME') }}/.cloudstack.ini"
+        __cloudstack_ini: "{{ __cloudstack_ini_candidates | select | select('file') | first | d('') }}"
+      no_log: "{{ __sap_vm_provision_no_log }}"
+
+    - name: SAP VM Provision - CloudStack - Assert API credentials are available
+      ansible.builtin.assert:
+        that:
+          - __sap_vm_provision_fact_cloudstack_api.url | length > 0
+          - __sap_vm_provision_fact_cloudstack_api.key | length > 0
+          - __sap_vm_provision_fact_cloudstack_api.secret | length > 0
+        fail_msg: Apache CloudStack API endpoint, key or secret could not be resolved.
+        quiet: true
+      no_log: "{{ __sap_vm_provision_no_log }}"
+
+
+    - name: SAP VM Provision - CloudStack - Provision hosts to Apache CloudStack
+      ansible.builtin.include_tasks:
+        file: "{{ __sap_vm_provision_task_file }}/execute_provision.yml"
+
+
+    - name: SAP VM Provision - CloudStack - Set fact when using Bastion SSH Proxy connection from Ansible control node to target node/s
+      ansible.builtin.set_fact:
+        __sap_vm_provision_fact_ssh_args_bastion: >-
+          -o ProxyCommand='ssh -W %h:%p {{ sap_vm_provision_bastion_user }}@{{ sap_vm_provision_bastion_public_ip }}
+          -p {{ sap_vm_provision_bastion_ssh_port }}
+          -i {{ sap_vm_provision_ssh_bastion_private_key_file_path }}
+          {{ sap_vm_provision_ssh_bastion_ssh_args }}'
+      when:
+        - sap_vm_provision_bastion_execution
+        - sap_vm_provision_bastion_user | d('') != ''
+        - sap_vm_provision_bastion_public_ip | d('') != ''
+        - sap_vm_provision_bastion_ssh_port | d('') != ''
+        - sap_vm_provision_ssh_bastion_private_key_file_path | d('') != ''
+
+    - name: SAP VM Provision - CloudStack - Add hosts provisioned to the Ansible Inventory
+      ansible.builtin.add_host:
+        name: "{{ add_item[0].host_node }}"
+        groups: "{{ add_item[0].sap_system_type + '_' if (add_item[0].sap_system_type != '') }}{{ add_item[0].sap_host_type }}"
+        ansible_host: "{{ add_item[0].default_ip }}"
+        ansible_user: "root"
+        ansible_ssh_private_key_file: "{{ sap_vm_provision_ssh_host_private_key_file_path }}"
+        ansible_ssh_common_args: "{{ sap_vm_provision_ssh_host_ssh_args }} {{ __sap_vm_provision_fact_ssh_args_bastion | d('') }}"
+      loop: "{{ ansible_play_hosts | map('extract', hostvars, '__sap_vm_provision_fact_provisioned_hosts') }}"
+      loop_control:
+        label: "{{ add_item[0].host_node }}"
+        loop_var: add_item
+      register: __sap_vm_provision_register_provision_host_all_add
+      no_log: "{{ __sap_vm_provision_no_log }}"
+
+    - name: SAP VM Provision - CloudStack - Set fact to hold all inventory hosts in all groups
+      ansible.builtin.set_fact:
+        __sap_vm_provision_fact_merged_hosts_list: "{{
+            [[groups[sap_vm_provision_group_hana_primary] | d([])],
+            [groups[sap_vm_provision_group_hana_secondary] | d([])],
+            [groups[sap_vm_provision_group_anydb_primary] | d([])],
+            [groups[sap_vm_provision_group_anydb_secondary] | d([])],
+            [groups[sap_vm_provision_group_nwas_ascs] | d([])],
+            [groups[sap_vm_provision_group_nwas_ers] | d([])],
+            [groups[sap_vm_provision_group_nwas_pas] | d([])],
+            [groups[sap_vm_provision_group_nwas_aas] | d([])]] | flatten | select() }}"
+
+
+    - name: SAP VM Provision - CloudStack - Identify hosts
+      ansible.builtin.include_tasks:
+        file: common/identify_hosts.yml
+
+    - name: SAP VM Provision - CloudStack - Set Ansible Vars
+      ansible.builtin.include_tasks:
+        file: common/set_ansible_vars.yml
+
+
+    - name: SAP VM Provision - CloudStack - Provision High Availability resources (Virtual IP reservation, SBD shared disk)
+      ansible.builtin.include_tasks:
+        file: "{{ __sap_vm_provision_task_file }}/execute_setup_ha.yml"
+        apply:
+          run_once: true
+      when:
+        - __sap_vm_provision_fact_is_ha_hana or __sap_vm_provision_fact_is_ha_anydb or __sap_vm_provision_fact_is_ha_nwas_ers
+
+
+  rescue:
+    # This requires no_log set on each Ansible Task, and not set on the Ansible Task Block
+    # This requires an Ansible Task Block containing the Ansible Tasks for calling
+    # Infrastructure Platform APIs (via Ansible Modules)
+    - name: SAP VM Provision - CloudStack - Show errors in task outputs
+      ansible.builtin.fail:
+        msg: "{{ lookup('ansible.builtin.vars', loop_item) }}"
+      loop:
+        # Main
+        - __sap_vm_provision_register_provision_host_all_add
+        # Provision
+        - __sap_vm_provision_register_cloudstack_ssh_key
+        - __sap_vm_provision_register_cloudstack_affinity_group
+        - __sap_vm_provision_register_provision_host_single_check_exists
+        - __sap_vm_provision_register_provision_host_single
+        - __sap_vm_provision_register_provision_host_single_volumes
+        # High Availability
+        - __sap_vm_provision_register_cloudstack_ha_vip
+        - __sap_vm_provision_register_cloudstack_kvm_hosts
+      loop_control:
+        loop_var: loop_item
+        index_var: loop_item_index
+        label: "{{ 'Variable No. ' + (loop_item_index | string) }}"
+      when:
+        - lookup('ansible.builtin.vars', loop_item, default='') | length > 0
+        - not lookup('ansible.builtin.vars', loop_item, default='') is skipped
+        - lookup('ansible.builtin.vars', loop_item, default='') is failed
+
+    - name: SAP VM Provision - CloudStack - Fail if provisioning failed
+      ansible.builtin.fail:
+        msg: |
+          FAIL: Provisioning has failed during one of tasks not producing registered output.
+          You can investigate failure in tasks above or by:
+          - Increasing verbosity
+          - Setting the variable '__sap_vm_provision_no_log' to 'false'
+
+
+- name: Ansible Task block to execute on target inventory hosts
+  delegate_to: "{{ inventory_hostname }}"
+  block:
+
+    # Required to collect the remote host's facts for further processing in the following steps.
+    # Collected facts can be used for all conditional tasks on provisioned hosts like ansible_facts['os_family'].
+    - name: SAP VM Provision - CloudStack - Gather host facts
+      ansible.builtin.setup:
+
+    # Must be set to short hostname,
+    # so that command 'hostname' and 'hostname -s' return the short hostname only;
+    # otherwise may cause error with SAP SWPM using name.domain.com.domain.com
+    - name: SAP VM Provision - CloudStack - Change system hostname (must be set to short name and not FQDN, as required by SAP)
+      ansible.builtin.hostname:
+        name: "{{ inventory_hostname_short }}"
+
+    - name: SAP VM Provision - CloudStack - Set /etc/hosts
+      ansible.builtin.include_tasks:
+        file: common/set_etc_hosts.yml
+
+    - name: SAP VM Provision - CloudStack - Set /etc/hosts for HA
+      ansible.builtin.include_tasks:
+        file: common/set_etc_hosts_ha.yml
+      when:
+        - __sap_vm_provision_fact_is_ha_hana or __sap_vm_provision_fact_is_ha_anydb or __sap_vm_provision_fact_is_ha_nwas_ers
+
+    - name: SAP VM Provision - CloudStack - Set /etc/hosts for Scale-Out
+      ansible.builtin.include_tasks:
+        file: common/set_etc_hosts_scaleout.yml
+      when: __sap_vm_provision_fact_is_hana_scaleout
+
+    - name: SAP VM Provision - CloudStack - Set vars for sap_storage_setup Ansible Role
+      ansible.builtin.include_tasks:
+        file: common/set_ansible_vars_storage.yml
+
+    - name: SAP VM Provision - CloudStack - Register Web Forward Proxy
+      ansible.builtin.include_tasks:
+        file: common/register_proxy.yml
+
+    - name: SAP VM Provision - CloudStack - Register Package Repositories
+      ansible.builtin.include_tasks:
+        file: common/register_os.yml
+
+    # Identify the Primary Active Network Interface used by Linux Pacemaker for the Virtual IP (e.g. eth0)
+    - name: SAP VM Provision - CloudStack - Identify Primary Active Network Interface
+      ansible.builtin.shell:
+        cmd: set -o pipefail && ip route show default 0.0.0.0/0 | awk '/default/ {print $5; exit}'
+      register: __sap_vm_provision_register_os_primary_active_vnic
+      changed_when: false
+      when:
+        - __sap_vm_provision_fact_is_ha_hana or __sap_vm_provision_fact_is_ha_anydb or __sap_vm_provision_fact_is_ha_nwas_ers
+
+    - name: SAP VM Provision - CloudStack - Set facts on each host - Primary Active Network Interface for HA/DR  # noqa var-naming[no-role-prefix]
+      ansible.builtin.set_fact:
+        sap_ha_pacemaker_cluster_vip_client_interface: "{{ __sap_vm_provision_register_os_primary_active_vnic.stdout }}"
+      when:
+        - __sap_vm_provision_register_os_primary_active_vnic is not skipped
+        - __sap_vm_provision_register_os_primary_active_vnic.stdout | d('') | length > 0
+
+    # Linux Pacemaker fencing using SBD, see 'sap_vm_provision_cloudstack_ha_fencing_method'
+    - name: SAP VM Provision - CloudStack - Set facts on each host - SBD fencing for Linux Pacemaker  # noqa var-naming[no-role-prefix]
+      ansible.builtin.set_fact:
+        sap_ha_pacemaker_cluster_sbd_enabled: true
+        sap_ha_pacemaker_cluster_sbd_devices: >-
+          {{ ['/dev/disk/by-id/virtio-' ~ sap_vm_provision_cloudstack_ha_sbd_disk_serial]
+             if sap_vm_provision_cloudstack_ha_fencing_method == 'sbd_linstor_kvm'
+             else sap_vm_provision_cloudstack_ha_sbd_devices }}
+        sap_ha_pacemaker_cluster_sbd_watchdog_modules: "{{ sap_vm_provision_cloudstack_ha_sbd_watchdog_modules }}"
+      when:
+        - sap_vm_provision_cloudstack_ha_fencing_method in ['sbd_devices', 'sbd_linstor_kvm']
+        - inventory_hostname in __sap_vm_provision_fact_cloudstack_ha_cluster_hosts | d([])
+
+    # sap_ha_pacemaker_cluster configures the SBD daemon for disk based SBD, but the STONITH resource and the
+    # cluster property 'stonith-enabled' must be provided, otherwise the cluster is created with fencing disabled.
+    # Variables defined by the user (e.g. extra vars) take precedence over these host facts.
+    - name: SAP VM Provision - CloudStack - Set facts on each host - SBD STONITH resource for Linux Pacemaker  # noqa var-naming[no-role-prefix]
+      ansible.builtin.set_fact:
+        # Format of the 'ha_cluster' Linux System Role resource primitives
+        sap_ha_pacemaker_cluster_stonith_custom:
+          - id: rsc_stonith_sbd
+            agent: "{{ 'stonith:external/sbd' if ansible_facts['os_family'] == 'Suse' else 'stonith:fence_sbd' }}"
+            instance_attrs:
+              - attrs: >-
+                  {{ [{'name': 'pcmk_delay_max', 'value': '15'}]
+                     + ([] if ansible_facts['os_family'] == 'Suse'
+                        else [{'name': 'devices', 'value': sap_ha_pacemaker_cluster_sbd_devices | join(',')}]) }}
+        sap_ha_pacemaker_cluster_cluster_properties:
+          stonith-enabled: true
+          stonith-timeout: 150
+      when:
+        - sap_vm_provision_cloudstack_ha_fencing_method in ['sbd_devices', 'sbd_linstor_kvm']
+        - inventory_hostname in __sap_vm_provision_fact_cloudstack_ha_cluster_hosts | d([])
+
+    - name: SAP VM Provision - CloudStack - Verify SBD device(s) are visible on the host
+      ansible.builtin.stat:
+        path: "{{ sbd_device_item }}"
+      register: __sap_vm_provision_register_cloudstack_sbd_device
+      until: __sap_vm_provision_register_cloudstack_sbd_device.stat.exists
+      retries: 12
+      delay: 5
+      loop: "{{ sap_ha_pacemaker_cluster_sbd_devices | d([]) }}"
+      loop_control:
+        loop_var: sbd_device_item
+      when:
+        - sap_vm_provision_cloudstack_ha_fencing_method in ['sbd_devices', 'sbd_linstor_kvm']
+        - inventory_hostname in __sap_vm_provision_fact_cloudstack_ha_cluster_hosts | d([])

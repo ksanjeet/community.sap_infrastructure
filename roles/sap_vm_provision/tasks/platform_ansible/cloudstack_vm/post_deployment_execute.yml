@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+---
+
+- name: SAP VM Provision - CloudStack - Post Deployment notification
+  ansible.builtin.debug:
+    msg: >-
+      There are no Post Deployment tasks for SAP on Apache CloudStack.
+      {% if sap_vm_provision_cloudstack_ha_fencing_method | d('') == 'sbd_linstor_kvm' %}
+      NOTE: The SBD shared disk of HA clusters is attached to the running KVM domains outside of CloudStack control.
+      After a CloudStack VM stop/start or migration, re-run the provisioning (idempotent) to re-attach it.
+      {% endif %}

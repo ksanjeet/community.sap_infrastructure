@@ -1,0 +1,155 @@
+# SPDX-License-Identifier: Apache-2.0
+---
+
+# Executed once (run_once) on the execution host after all hosts were provisioned.
+# 1. Reserve each High Availability Virtual IP (VIP) as secondary IP on the NIC of the primary host,
+#    so CloudStack IPAM does not allocate the address to another VM.
+#    Linux Pacemaker (IPaddr2) moves the VIP between cluster hosts on the Guest Network.
+# 2. Only for fencing method 'sbd_linstor_kvm': create one SBD shared disk per HA cluster on LINSTOR
+#    (DRBD dual-primary) and attach it to the KVM domains of all cluster hosts.
+
+- name: SAP VM Provision - CloudStack - HA - Set fact for HA clusters
+  ansible.builtin.set_fact:
+    __sap_vm_provision_fact_cloudstack_ha_clusters: "{{ __clusters | selectattr('hosts') | list }}"
+    __sap_vm_provision_fact_cloudstack_ha_cluster_hosts: "{{ __clusters | map(attribute='hosts') | flatten | unique }}"
+  vars:
+    __clusters:
+      - name: hana
+        hosts: "{{ (groups[sap_vm_provision_group_hana_primary] | d([]) + groups[sap_vm_provision_group_hana_secondary] | d([]))
+          if __sap_vm_provision_fact_is_ha_hana else [] }}"
+      - name: anydb
+        hosts: "{{ (groups[sap_vm_provision_group_anydb_primary] | d([]) + groups[sap_vm_provision_group_anydb_secondary] | d([]))
+          if __sap_vm_provision_fact_is_ha_anydb else [] }}"
+      - name: nwas
+        hosts: "{{ (groups[sap_vm_provision_group_nwas_ascs] | d([]) + groups[sap_vm_provision_group_nwas_ers] | d([]))
+          if __sap_vm_provision_fact_is_ha_nwas_ers else [] }}"
+
+
+- name: SAP VM Provision - CloudStack - HA - Reserve Virtual IP as secondary IP on the primary host NIC
+  ngine_io.cloudstack.instance_nic_secondaryip:
+    vm: "{{ vip_item.host }}"
+    vm_guest_ip: "{{ vip_item.vip | regex_replace('/.*', '') }}"
+    network: "{{ sap_vm_provision_cloudstack_network_name }}"
+    zone: "{{ sap_vm_provision_cloudstack_zone }}"
+    domain: "{{ sap_vm_provision_cloudstack_domain | d('', true) or omit }}"
+    account: "{{ sap_vm_provision_cloudstack_account | d('', true) or omit }}"
+    project: "{{ sap_vm_provision_cloudstack_project | d('', true) or omit }}"
+    state: present
+  loop: "{{ __vips | selectattr('vip') | selectattr('host') | list }}"
+  loop_control:
+    loop_var: vip_item
+    label: "{{ vip_item.host }}: {{ vip_item.vip }}"
+  register: __sap_vm_provision_register_cloudstack_ha_vip
+  no_log: "{{ __sap_vm_provision_no_log }}"
+  vars:
+    __vips:
+      - vip: "{{ sap_vm_provision_ha_vip_hana_primary | d('') if __sap_vm_provision_fact_is_ha_hana else '' }}"
+        host: "{{ groups[sap_vm_provision_group_hana_primary] | d([]) | first | d('') }}"
+      - vip: "{{ sap_vm_provision_ha_vip_anydb_primary | d('') if __sap_vm_provision_fact_is_ha_anydb else '' }}"
+        host: "{{ groups[sap_vm_provision_group_anydb_primary] | d([]) | first | d('') }}"
+      - vip: "{{ sap_vm_provision_ha_vip_nwas_abap_ascs | d('') if __sap_vm_provision_fact_is_ha_nwas_ers else '' }}"
+        host: "{{ groups[sap_vm_provision_group_nwas_ascs] | d([]) | first | d('') }}"
+      - vip: "{{ sap_vm_provision_ha_vip_nwas_abap_ers | d('') if __sap_vm_provision_fact_is_ha_nwas_ers else '' }}"
+        host: "{{ groups[sap_vm_provision_group_nwas_ers] | d([]) | first | d('') }}"
+
+
+- name: SAP VM Provision - CloudStack - HA - Block for SBD shared disk on LINSTOR attached to KVM domains
+  when:
+    - sap_vm_provision_cloudstack_ha_fencing_method == 'sbd_linstor_kvm'
+    - __sap_vm_provision_fact_cloudstack_ha_clusters | length > 0
+  block:
+
+    - name: SAP VM Provision - CloudStack - HA - Assert cluster VMs run on KVM (fencing method sbd_linstor_kvm)
+      ansible.builtin.assert:
+        that: hostvars[host_item].__sap_vm_provision_fact_cloudstack_hypervisor | d('') | upper == 'KVM'
+        fail_msg: >-
+          Fencing method 'sbd_linstor_kvm' requires the KVM hypervisor, but '{{ host_item }}' runs on
+          '{{ hostvars[host_item].__sap_vm_provision_fact_cloudstack_hypervisor | d('unknown') }}'.
+          Use 'sbd_devices' with shared SBD device(s) or 'none'.
+      loop: "{{ __sap_vm_provision_fact_cloudstack_ha_cluster_hosts }}"
+      loop_control:
+        loop_var: host_item
+
+    - name: SAP VM Provision - CloudStack - HA - Get KVM hosts
+      ngine_io.cloudstack.api_request:
+        command: listHosts
+        params:
+          type: Routing
+      register: __sap_vm_provision_register_cloudstack_kvm_hosts
+      no_log: "{{ __sap_vm_provision_no_log }}"
+
+    - name: SAP VM Provision - CloudStack - HA - Get Linstor Primary Storage
+      ngine_io.cloudstack.api_request:
+        command: listStoragePools
+      register: __sap_vm_provision_register_cloudstack_storage_pools
+      no_log: "{{ __sap_vm_provision_no_log }}"
+      when: >-
+        sap_vm_provision_cloudstack_ha_sbd_linstor_api_url | d('') | length == 0
+        or sap_vm_provision_cloudstack_ha_sbd_linstor_resource_group | d('') | length == 0
+
+    - name: SAP VM Provision - CloudStack - HA - Set facts for KVM hosts and LINSTOR
+      ansible.builtin.set_fact:
+        __sap_vm_provision_fact_cloudstack_kvm_host_map: "{{ __kvm_host_map }}"
+        __sap_vm_provision_fact_cloudstack_linstor_api_url: >-
+          {{ (sap_vm_provision_cloudstack_ha_sbd_linstor_api_url | d('', true) or __linstor_pool.ipaddress | d('')) | regex_replace('/+$', '') }}
+        __sap_vm_provision_fact_cloudstack_linstor_resource_group: >-
+          {{ sap_vm_provision_cloudstack_ha_sbd_linstor_resource_group | d('', true) or __linstor_pool.path | d('DfltRscGrp') }}
+      vars:
+        __kvm_hosts: "{{ __sap_vm_provision_register_cloudstack_kvm_hosts.response.host | d([]) }}"
+        __kvm_host_map: |
+          {% set result = {} %}
+          {% for kvm in __kvm_hosts %}
+          {%   set override = sap_vm_provision_cloudstack_kvm_host_map[kvm.name] | d({}) %}
+          {%   set _ = result.update({kvm.name: {
+                 'address': override.address | d(kvm.ipaddress),
+                 'linstor_node': override.linstor_node | d(kvm.name)}}) %}
+          {% endfor %}
+          {{ result }}
+        __linstor_pool: >-
+          {{ __sap_vm_provision_register_cloudstack_storage_pools.response.storagepool | d([])
+             | selectattr('type', 'equalto', 'Linstor') | first | d({}) }}
+
+    - name: SAP VM Provision - CloudStack - HA - Assert LINSTOR Primary Storage is available (fencing method sbd_linstor_kvm)
+      ansible.builtin.assert:
+        that: __sap_vm_provision_fact_cloudstack_linstor_api_url | trim | length > 0
+        fail_msg: >-
+          Fencing method 'sbd_linstor_kvm' requires a CloudStack Linstor Primary Storage or
+          'sap_vm_provision_cloudstack_ha_sbd_linstor_api_url'. For other storage backends (e.g. NFS, CLVM_NG, Ceph RBD)
+          use 'sbd_devices' with shared SBD device(s) or 'none'.
+
+    - name: SAP VM Provision - CloudStack - HA - Assert LINSTOR controller and KVM hosts are known
+      ansible.builtin.assert:
+        that:
+          - __sap_vm_provision_fact_cloudstack_linstor_api_url | trim | length > 0
+          - hostvars[host_item].__sap_vm_provision_fact_cloudstack_kvm_host | d('') in __sap_vm_provision_fact_cloudstack_kvm_host_map
+          - hostvars[host_item].__sap_vm_provision_fact_cloudstack_instance_name | d('') | length > 0
+        fail_msg: |
+          Unable to determine the LINSTOR controller URL, the KVM host or the KVM domain name of '{{ host_item }}'.
+          The CloudStack API user requires root admin privileges for SBD shared disk setup,
+          or define 'sap_vm_provision_cloudstack_ha_sbd_linstor_api_url'.
+      loop: "{{ __sap_vm_provision_fact_cloudstack_ha_cluster_hosts }}"
+      loop_control:
+        loop_var: host_item
+
+    - name: SAP VM Provision - CloudStack - HA - Add KVM hosts to the Ansible Inventory
+      ansible.builtin.add_host:
+        name: "cloudstack_kvm_{{ kvm_item }}"
+        groups: sap_vm_provision_cloudstack_kvm_hosts
+        ansible_host: "{{ __sap_vm_provision_fact_cloudstack_kvm_host_map[kvm_item].address }}"
+        ansible_user: "{{ sap_vm_provision_cloudstack_kvm_host_ssh_user }}"
+        ansible_ssh_private_key_file: "{{ sap_vm_provision_cloudstack_kvm_host_ssh_private_key_file_path
+          | d('', true) or sap_vm_provision_ssh_host_private_key_file_path }}"
+        ansible_ssh_common_args: "{{ sap_vm_provision_cloudstack_kvm_host_ssh_args }}"
+        ansible_become: "{{ sap_vm_provision_cloudstack_kvm_host_ssh_user != 'root' }}"
+      loop: "{{ __sap_vm_provision_fact_cloudstack_ha_cluster_hosts
+        | map('extract', hostvars, '__sap_vm_provision_fact_cloudstack_kvm_host') | unique | list }}"
+      loop_control:
+        loop_var: kvm_item
+
+    - name: SAP VM Provision - CloudStack - HA - Create and attach SBD shared disk for each HA cluster
+      ansible.builtin.include_tasks:
+        file: "{{ __sap_vm_provision_task_file }}/execute_setup_ha_sbd.yml"
+      loop: "{{ __sap_vm_provision_fact_cloudstack_ha_clusters }}"
+      loop_control:
+        loop_var: cluster_item
+        label: "{{ cluster_item.name }}: {{ cluster_item.hosts | join(', ') }}"

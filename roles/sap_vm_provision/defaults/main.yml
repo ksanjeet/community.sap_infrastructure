@@ -7,7 +7,7 @@
 # ansible , ansible_to_terraform
 sap_vm_provision_iac_type: ""
 
-# aws_ec2_vs , gcp_ce_vm , ibmcloud_vs , ibmcloud_powervs , msazure_vm , ibmpowervm_vm , kubevirt_vm , ovirt_vm , vmware_vm
+# aws_ec2_vs , gcp_ce_vm , ibmcloud_vs , ibmcloud_powervs , msazure_vm , ibmpowervm_vm , kubevirt_vm , ovirt_vm , vmware_vm , cloudstack_vm
 sap_vm_provision_iac_platform: ""
 
 # execution_host where ansible playbook will delegate_to
@@ -218,6 +218,18 @@ sap_vm_provision_msazure_placement_strategy_spread: false
 # Specify role name for fence agent
 sap_vm_provision_msazure_ha_iam_role: "Linux Fence Agent Role"
 
+# High Availability fencing method for MS Azure:
+# - fence_azure_arm: Azure Fence Agent with the VM Managed Service Identity (MSI). Creates the custom IAM role
+#                    'sap_vm_provision_msazure_ha_iam_role' and role assignments, requires Owner or User Access Administrator.
+# - sbd_shared_disk: SBD on an Azure shared disk (Premium SSD, maxShares) attached to all hosts of each HA cluster.
+#                    No IAM role required (Contributor is sufficient).
+sap_vm_provision_msazure_ha_fencing_method: "fence_azure_arm"
+sap_vm_provision_msazure_ha_sbd_disk_size_gb: 4  # P1, supports maxShares up to 3
+sap_vm_provision_msazure_ha_sbd_disk_storage_account_type: "Premium_LRS"  # Premium_LRS or Premium_ZRS (zonal deployments)
+sap_vm_provision_msazure_ha_sbd_disk_lun: 63  # Same LUN on all cluster hosts, guest path /dev/disk/azure/scsi1/lun<LUN>
+sap_vm_provision_msazure_ha_sbd_disk_name_prefix: "sbd"  # Disk name: <prefix>-<first cluster hostname>
+sap_vm_provision_msazure_ha_sbd_watchdog_modules: ["softdog"]
+
 ####
 # Infrastructure Platform - Cloud Hyperscaler - High Availability resources
 ####
@@ -239,6 +251,9 @@ sap_vm_provision_ha_load_balancer_name_nwas: "lb-sap-ha-nwas"  # '-ascs' and '-e
 # IBM PowerVM:          the VIP must be within the VLAN Subnet range
 # OVirt KVM:            the VIP must be within the VLAN Subnet range
 # KubeVirt:             the VIP must be within the VLAN Subnet range
+# Apache CloudStack:    the VIP must be within the CloudStack Guest Network (Shared/L2) range, and unused.
+#                       It is reserved as secondary IP on the primary host NIC (e.g. 192.168.10.20/24).
+#                       Guest Networks with Security Groups / IP anti-spoofing prevent the VIP move to other hosts.
 ####
 
 # Blank defaults for High Availability Virtual IPs (VIPs), with CIDR
@@ -296,6 +311,20 @@ sap_vm_provision_ovirt_engine_user: ""
 sap_vm_provision_ovirt_hypervisor_cluster_host_node_name: ""
 sap_vm_provision_ovirt_hypervisor_cluster_name: ""
 sap_vm_provision_ovirt_hypervisor_cluster_storage_domain_name: ""
+
+# Apache CloudStack
+# API credentials. When empty, the ngine_io.cloudstack modules fall back to the
+# CLOUDSTACK_ENDPOINT / CLOUDSTACK_KEY / CLOUDSTACK_SECRET environment variables or cloudstack.ini
+sap_vm_provision_cloudstack_api_url: "" # e.g. http://cloudstack.example.com:8080/client/api
+sap_vm_provision_cloudstack_api_key: ""
+sap_vm_provision_cloudstack_api_secret: ""
+sap_vm_provision_cloudstack_api_timeout: 120
+sap_vm_provision_cloudstack_api_verify_ssl_cert: true
+sap_vm_provision_cloudstack_zone: ""
+sap_vm_provision_cloudstack_domain: "" # optional, default domain of API user
+sap_vm_provision_cloudstack_account: "" # optional, default account of API user
+sap_vm_provision_cloudstack_project: "" # optional
+sap_vm_provision_cloudstack_network_name: "" # Guest Network (Shared or L2 with DHCP recommended for direct connectivity)
 
 # VMware
 sap_vm_provision_vmware_vcenter_hostname: ""
@@ -999,6 +1028,82 @@ sap_vm_provision_vmware_vm_host_specifications_dictionary:
           disk_size: 512                 # size in GB, integer
           disk_type: scsi                # VMware Virtual Disk Node (scsi, ide, sata)
 
+
+# Apache CloudStack VM
+
+# Hypervisor of the VMs (KVM, XenServer, VMware, ...). Empty: CloudStack selects it from the Template.
+sap_vm_provision_cloudstack_vm_hypervisor: ""
+
+# SSH Key Pair registered in CloudStack, created from 'sap_vm_provision_ssh_host_public_key_file_path' if missing
+sap_vm_provision_cloudstack_vm_ssh_keypair_name: "sap-vm-provision"
+
+# Disk Offering used for all data volumes in 'storage_definition' (must allow custom size).
+# The Primary Storage backend (e.g. NFS, CLVM_NG, Ceph RBD, LINSTOR) is selected by the storage tags of the Disk Offering.
+# Can be overridden per filesystem with 'disk_offering' in 'storage_definition'.
+sap_vm_provision_cloudstack_vm_disk_offering: "Custom"
+
+# Root disk size in GB (template root partition is expanded by cloud-init growpart). 0 = template size.
+# Can be overridden per host with 'cloudstack_vm_root_disk_size_gb'
+sap_vm_provision_cloudstack_vm_root_disk_size_gb: 50
+
+# Optional Host Anti-Affinity group (created if missing), places each VM on a different hypervisor host
+sap_vm_provision_cloudstack_vm_affinity_group_name: ""
+
+# Additional cloud-config appended to the generated cloud-init user-data (String, YAML without '#cloud-config' header)
+sap_vm_provision_cloudstack_vm_user_data_extra: ""
+
+# High Availability - fencing method for Linux Pacemaker clusters:
+# - sbd_devices:     SBD with shared block device(s) already visible in all cluster VMs (e.g. iSCSI or multipath LUN,
+#                    any hypervisor and storage). Define 'sap_vm_provision_cloudstack_ha_sbd_devices'.
+# - sbd_linstor_kvm: SBD shared disk created automatically as LINSTOR resource (DRBD dual-primary) and attached to the
+#                    KVM domains with virsh. Requires KVM hypervisor, LINSTOR Primary Storage, root admin API user and
+#                    SSH access with root privileges to the KVM hosts.
+#                    NOTE: the disk is attached outside of CloudStack control, after a CloudStack VM stop/start or
+#                    migration it is detached and the provisioning must be re-run to re-attach it.
+# - none:            no fencing configuration by this role (e.g. define 'sap_ha_pacemaker_cluster_stonith_custom').
+sap_vm_provision_cloudstack_ha_fencing_method: "sbd_devices"
+sap_vm_provision_cloudstack_ha_sbd_devices: [] # e.g. ['/dev/disk/by-id/scsi-36001405abcdef']
+sap_vm_provision_cloudstack_ha_sbd_watchdog_modules: ["softdog"]
+
+# sbd_linstor_kvm options
+sap_vm_provision_cloudstack_ha_sbd_linstor_api_url: "" # e.g. http://kvmhost1:3370 , default: from CloudStack Linstor Primary Storage
+sap_vm_provision_cloudstack_ha_sbd_linstor_api_validate_certs: true
+sap_vm_provision_cloudstack_ha_sbd_linstor_resource_prefix: "sbd" # LINSTOR resource name: <prefix>-<first cluster hostname>
+sap_vm_provision_cloudstack_ha_sbd_linstor_resource_group: "" # default: from CloudStack Linstor Primary Storage
+sap_vm_provision_cloudstack_ha_sbd_size_mib: 100
+sap_vm_provision_cloudstack_ha_sbd_disk_serial: "sapsbd" # Guest path: /dev/disk/by-id/virtio-<serial>, max 20 characters
+sap_vm_provision_cloudstack_ha_sbd_disk_target: "vdz"
+
+# KVM hosts SSH connection (sbd_linstor_kvm only), used for attachment of the SBD shared disk with virsh
+sap_vm_provision_cloudstack_kvm_host_ssh_user: "root" # non-root users require passwordless sudo
+sap_vm_provision_cloudstack_kvm_host_ssh_private_key_file_path: "" # default: sap_vm_provision_ssh_host_private_key_file_path
+sap_vm_provision_cloudstack_kvm_host_ssh_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+# Optional map of CloudStack Host name to SSH address and LINSTOR node name.
+# Default: CloudStack Host IP address, and LINSTOR node name equal to CloudStack Host name.
+sap_vm_provision_cloudstack_kvm_host_map: {}
+#  kvmhost1:
+#    address: 192.168.1.10
+#    linstor_node: kvmhost1
+
+sap_vm_provision_cloudstack_vm_host_os_image: ""
+sap_vm_provision_cloudstack_vm_host_os_image_dictionary:
+  sles4sap_15_7: "SLES-for-SAP-15-SP7" # CloudStack Template name (cloud-init with CloudStack datasource, Python >= 3.8)
+
+sap_vm_provision_cloudstack_vm_host_specifications_dictionary:
+  example_host_specification_plan:
+    host1: # Hostname, must be 13 characters or less
+      sap_host_type: hana_primary # hana_primary, hana_secondary, anydb_primary, anydb_secondary, nwas_ascs, nwas_ers, nwas_pas, nwas_aas
+      cloudstack_vm_service_offering: "sap-hana-xsmall" # CloudStack Service Offering name
+      # cloudstack_vm_cpu: 8                # only for Custom Service Offerings
+      # cloudstack_vm_memory_mib: 65536     # only for Custom Service Offerings
+      # cloudstack_vm_ip_address: 192.168.10.11 # optional static IP from Guest Network range
+      # cloudstack_vm_root_disk_size_gb: 50
+      # cloudstack_vm_host: host1           # optional placement on CloudStack Host (root admin only)
+      storage_definition:
+        - name: hana
+          mountpoint: /hana
+          disk_size: 200                 # size in GB, integer
+          filesystem_type: xfs
 
 # Default to prevent Infrastructure Platform credential secrets leaking
 # This should only be amended for debugging

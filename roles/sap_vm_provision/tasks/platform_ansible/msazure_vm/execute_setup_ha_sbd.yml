@@ -1,0 +1,89 @@
+# SPDX-License-Identifier: Apache-2.0
+---
+
+# Fencing method 'sbd_shared_disk' (executed once on the execution host):
+# - One Azure shared disk (maxShares = number of cluster hosts) per HA cluster, attached to all cluster hosts
+#   at the same LUN without host caching, visible in the guest as /dev/disk/azure/scsi1/lun<LUN>
+# - Facts for sap_ha_pacemaker_cluster on the cluster hosts: SBD device, watchdog, SBD STONITH resource
+# See: https://learn.microsoft.com/en-us/azure/sap/workloads/high-availability-guide-suse-pacemaker (SBD with an Azure shared disk)
+
+- name: SAP VM Provision - Azure - HA SBD - Set fact for HA clusters
+  ansible.builtin.set_fact:
+    __sap_vm_provision_fact_msazure_ha_clusters: "{{ __clusters | selectattr('hosts') | list }}"
+  vars:
+    __clusters:
+      - name: hana
+        hosts: "{{ (groups[sap_vm_provision_group_hana_primary] | d([]) + groups[sap_vm_provision_group_hana_secondary] | d([]))
+          if __sap_vm_provision_fact_is_ha_hana else [] }}"
+      - name: anydb
+        hosts: "{{ (groups[sap_vm_provision_group_anydb_primary] | d([]) + groups[sap_vm_provision_group_anydb_secondary] | d([]))
+          if __sap_vm_provision_fact_is_ha_anydb else [] }}"
+      - name: nwas
+        hosts: "{{ (groups[sap_vm_provision_group_nwas_ascs] | d([]) + groups[sap_vm_provision_group_nwas_ers] | d([]))
+          if __sap_vm_provision_fact_is_ha_nwas_ers else [] }}"
+
+- name: SAP VM Provision - Azure - HA SBD - Create and attach Azure shared disk for each HA cluster
+  azure.azcollection.azure_rm_manageddisk:
+    name: "{{ sap_vm_provision_msazure_ha_sbd_disk_name_prefix }}-{{ cluster_item.hosts | first }}"
+    resource_group: "{{ sap_vm_provision_msazure_resource_group_name }}"
+    location: "{{ sap_vm_provision_msazure_location_region }}"
+    disk_size_gb: "{{ sap_vm_provision_msazure_ha_sbd_disk_size_gb }}"
+    storage_account_type: "{{ sap_vm_provision_msazure_ha_sbd_disk_storage_account_type }}"
+    max_shares: "{{ [cluster_item.hosts | length, 2] | max }}"
+    lun: "{{ sap_vm_provision_msazure_ha_sbd_disk_lun }}"
+    attach_caching: ""  # Shared disks require host caching 'None'
+    managed_by_extended: "{{ cluster_item.hosts | map('community.general.dict_kv', 'name')
+      | map('combine', {'resource_group': sap_vm_provision_msazure_resource_group_name}) | list }}"
+    tags:
+      sap_vm_provision: "sbd"
+      sap_vm_provision_hosts: "{{ cluster_item.hosts | join('_') }}"
+    subscription_id: "{{ sap_vm_provision_msazure_subscription_id }}"
+    tenant: "{{ sap_vm_provision_msazure_tenant_id }}"
+    client_id: "{{ sap_vm_provision_msazure_app_client_id }}"
+    secret: "{{ sap_vm_provision_msazure_app_client_secret }}"
+  loop: "{{ __sap_vm_provision_fact_msazure_ha_clusters }}"
+  loop_control:
+    loop_var: cluster_item
+    label: "{{ cluster_item.name }}: {{ cluster_item.hosts | join(', ') }}"
+  register: __sap_vm_provision_register_msazure_ha_sbd_disk
+  no_log: "{{ __sap_vm_provision_no_log }}"
+
+# sap_ha_pacemaker_cluster configures the SBD daemon for disk based SBD; the STONITH resource and the cluster
+# property 'stonith-enabled' must be provided, otherwise the cluster is created with fencing disabled.
+# Variables defined by the user (e.g. extra vars) take precedence over these host facts.
+- name: SAP VM Provision - Azure - HA SBD - Set facts on cluster hosts for SBD fencing with Linux Pacemaker  # noqa var-naming[no-role-prefix]
+  delegate_to: "{{ host_item }}"
+  delegate_facts: true
+  ansible.builtin.set_fact:
+    sap_ha_pacemaker_cluster_sbd_enabled: true
+    sap_ha_pacemaker_cluster_sbd_devices:
+      - "/dev/disk/azure/scsi1/lun{{ sap_vm_provision_msazure_ha_sbd_disk_lun }}"
+    sap_ha_pacemaker_cluster_sbd_watchdog_modules: "{{ sap_vm_provision_msazure_ha_sbd_watchdog_modules }}"
+    sap_ha_pacemaker_cluster_stonith_custom:
+      - id: rsc_stonith_sbd
+        agent: "{{ 'stonith:external/sbd' if hostvars[host_item].ansible_facts['os_family'] | d('Suse') == 'Suse' else 'stonith:fence_sbd' }}"
+        instance_attrs:
+          - attrs: >-
+              {{ [{'name': 'pcmk_delay_max', 'value': '15'}]
+                 + ([] if hostvars[host_item].ansible_facts['os_family'] | d('Suse') == 'Suse'
+                    else [{'name': 'devices', 'value': '/dev/disk/azure/scsi1/lun' ~ sap_vm_provision_msazure_ha_sbd_disk_lun}]) }}
+    # Microsoft recommendation for SBD on Azure: stonith-timeout 144
+    sap_ha_pacemaker_cluster_cluster_properties:
+      stonith-enabled: true
+      stonith-timeout: 144
+  loop: "{{ __sap_vm_provision_fact_msazure_ha_clusters | map(attribute='hosts') | flatten | unique }}"
+  loop_control:
+    loop_var: host_item
+
+- name: SAP VM Provision - Azure - HA SBD - Verify the shared disk is visible on cluster hosts
+  delegate_to: "{{ host_item }}"
+  become: true
+  ansible.builtin.stat:
+    path: "/dev/disk/azure/scsi1/lun{{ sap_vm_provision_msazure_ha_sbd_disk_lun }}"
+  register: __sap_vm_provision_register_msazure_ha_sbd_device
+  until: __sap_vm_provision_register_msazure_ha_sbd_device.stat.exists
+  retries: 24
+  delay: 5
+  loop: "{{ __sap_vm_provision_fact_msazure_ha_clusters | map(attribute='hosts') | flatten | unique }}"
+  loop_control:
+    loop_var: host_item

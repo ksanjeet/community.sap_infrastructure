@@ -89,5 +89,28 @@
           proxy=http://{{ sap_vm_provision_proxy_web_forward_proxy_ip }}
       when:
         - ansible_facts['os_family'] == "RedHat"
-        - not __sap_vm_provision_register_ibmcloud_pi_workspace_capabilities.resource.pi_workspace_capabilities['power-edge-router']
+        # The IBM Power VS capability is only registered on ibmcloud_powervs, default to false on other platforms
+        - not (__sap_vm_provision_register_ibmcloud_pi_workspace_capabilities.resource.pi_workspace_capabilities['power-edge-router'] | d(false))
         - __sap_vm_provision_fact_proxy_platform_exclude | d('') | length == 0
+
+    # zypper (incl. the SUSE Public Cloud update infrastructure plugin) and other system services do not read the
+    # login shell config file, SLES uses the system-wide proxy configuration in /etc/sysconfig/proxy.
+    - name: SAP VM Provision - Proxy - Set system-wide proxy in /etc/sysconfig/proxy on SLES
+      ansible.builtin.lineinfile:
+        path: /etc/sysconfig/proxy
+        regexp: "^{{ proxy_item.key }}="
+        line: '{{ proxy_item.key }}="{{ proxy_item.value }}"'
+        create: true
+        mode: '0644'
+      loop: "{{ __proxy_settings | dict2items }}"
+      loop_control:
+        loop_var: proxy_item
+        label: "{{ proxy_item.key }}"
+      vars:
+        __proxy_settings:
+          PROXY_ENABLED: "yes"
+          HTTP_PROXY: "http://{{ sap_vm_provision_proxy_web_forward_proxy_ip }}"
+          HTTPS_PROXY: "http://{{ sap_vm_provision_proxy_web_forward_proxy_ip }}"
+          NO_PROXY: "{{ ([sap_vm_provision_proxy_web_forward_exclusions | d('localhost,127.0.0.1'),
+            __sap_vm_provision_fact_web_forward_exclusions_dynamic] | select | join(',')) ~ (__sap_vm_provision_fact_proxy_platform_exclude | d('')) }}"
+      when: ansible_facts['os_family'] == "Suse"
