@@ -1105,6 +1105,10 @@ sap_vm_provision_cloudstack_vm_host_specifications_dictionary:
           disk_size: 200                 # size in GB, integer
           filesystem_type: xfs
 
+# SUSE Pay-As-You-Go images (MS Azure, Google Cloud, AWS): disable guestregister-lic-watcher.timer, which removes the
+# registration after a transient network error during its PAYG/BYOS check. Set to false to keep the license watcher.
+sap_vm_provision_suse_payg_disable_license_watcher: true
+
 # Default to prevent Infrastructure Platform credential secrets leaking
 # This should only be amended for debugging
 __sap_vm_provision_no_log: true

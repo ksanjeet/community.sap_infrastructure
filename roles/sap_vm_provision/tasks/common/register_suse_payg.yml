@@ -7,6 +7,23 @@
 # invalid credentials. Re-register only in that case; a failed guestregister.service alone (e.g. one optional module timed
 # out) is not a reason, as the repositories may be fully usable.
 
+# The license watcher (guestregister-lic-watcher.timer, every minute) re-checks PAYG/BYOS with a 2 s timeout and falls back
+# to BYOS on any error; a short network interruption (e.g. when the HA Virtual IP is added) is then treated as a license
+# change to BYOS and the registration with all repositories is removed. Disabled during provisioning by default.
+- name: SAP VM Provision - SUSE PAYG - Disable license change watcher of SUSE Pay-As-You-Go image
+  ansible.builtin.shell:
+    cmd: |
+      command -v registercloudguest >/dev/null || exit 0
+      systemctl list-unit-files guestregister-lic-watcher.timer >/dev/null 2>&1 || exit 0
+      if systemctl is-enabled --quiet guestregister-lic-watcher.timer || systemctl is-active --quiet guestregister-lic-watcher.timer; then
+        systemctl disable --now guestregister-lic-watcher.timer && echo "disabled"
+      fi
+  register: __sap_vm_provision_register_suse_payg_lic_watcher
+  changed_when: "'disabled' in __sap_vm_provision_register_suse_payg_lic_watcher.stdout"
+  when:
+    - ansible_facts['os_family'] == 'Suse'
+    - sap_vm_provision_suse_payg_disable_license_watcher | d(true) | bool
+
 - name: SAP VM Provision - SUSE PAYG - Check repositories of SUSE Pay-As-You-Go image
   ansible.builtin.shell:
     cmd: |

@@ -6,6 +6,7 @@ minor_changes:
   - sap_vm_provision - Configure ``/etc/sysconfig/proxy`` on SUSE hosts when ``sap_vm_provision_proxy_web_forward_proxy_ip`` is set, so zypper uses the proxy.
   - sap_vm_provision - MS Azure - Apply web forward proxy settings and re-register SUSE PAYG images without repositories through the proxy.
 bugfixes:
+  - sap_vm_provision - Disable the SUSE PAYG license watcher (``sap_vm_provision_suse_payg_disable_license_watcher``), which removed the registration and all repositories after a transient network error during its PAYG/BYOS check (e.g. when the HA Virtual IP is added).
   - sap_vm_provision - Re-register SUSE Pay-As-You-Go images (MS Azure, Google Cloud) when the first-boot registration left no repositories or invalid credentials (``common/register_suse_payg.yml``).
   - sap_vm_provision - MS Azure - Fix Availability Set lookup, which failed when ``sap_vm_provision_msazure_placement_strategy_spread`` is false (default) and when it is true.
   - sap_vm_provision - MS Azure - Use ``sap_vm_provision_msazure_resource_group_name`` when ``sap_vm_provision_msazure_private_dns_resource_group_name`` is an empty string.
