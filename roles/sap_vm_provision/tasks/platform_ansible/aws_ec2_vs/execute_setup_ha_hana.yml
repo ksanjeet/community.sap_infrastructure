@@ -82,6 +82,7 @@
     secret_key: "{{ sap_vm_provision_aws_secret_access_key }}"
   register: __sap_vm_provision_register_aws_iam_policy_stonith_saphana
   no_log: "{{ __sap_vm_provision_no_log }}"
+  when: sap_vm_provision_aws_ha_iam_manage | d(true) | bool
 
 
 # Equivalent to aws ec2 associate-iam-instance-profile

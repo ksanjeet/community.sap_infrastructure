@@ -26,6 +26,7 @@
         name: "{{ sap_vm_provision_aws_placement_resource_name }}-{{ placement_item }}"
         state: present
         strategy: spread
+        tags: "{{ sap_vm_provision_resource_tags | d({}) or omit }}"
         access_key: "{{ sap_vm_provision_aws_access_key }}"
         secret_key: "{{ sap_vm_provision_aws_secret_access_key }}"
       loop: "{{

@@ -32,6 +32,7 @@
     - name: SAP VM Provision - Azure - Update NLB for SAP AnyDB with Virtual IP and Health Probe configuration
       azure.azcollection.azure_rm_loadbalancer:
         resource_group: "{{ sap_vm_provision_msazure_resource_group_name }}"
+        tags: "{{ sap_vm_provision_resource_tags | d({}) or omit }}"
         name: "{{ sap_vm_provision_ha_load_balancer_name_anydb }}"
         # AnyPort (HA Port) Protocol rule is not allowed for basic SKU load balancer, use standard SKU load balancer instead
         sku: "Standard"

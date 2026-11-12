@@ -146,6 +146,25 @@
   register: __sap_vm_provision_register_instance_info
   no_log: "{{ __sap_vm_provision_no_log }}"
 
+# Tags of the instance are not inherited by its EBS volumes and network interfaces
+- name: SAP VM Provision - AWS - Apply resource tags to EBS volumes and network interfaces of AWS EC2 instance
+  amazon.aws.ec2_tag:
+    resource: "{{ tag_resource_id }}"
+    tags: "{{ sap_vm_provision_resource_tags }}"
+    state: present
+    access_key: "{{ sap_vm_provision_aws_access_key }}"
+    secret_key: "{{ sap_vm_provision_aws_secret_access_key }}"
+  loop: "{{ (__sap_vm_provision_register_instance_info.instances[0].block_device_mappings | d([])
+      | map(attribute='ebs') | map(attribute='volume_id') | list)
+    + (__sap_vm_provision_register_instance_info.instances[0].network_interfaces | d([])
+      | map(attribute='network_interface_id') | list) }}"
+  loop_control:
+    loop_var: tag_resource_id
+  no_log: "{{ __sap_vm_provision_no_log }}"
+  when:
+    - sap_vm_provision_resource_tags | d({}) | length > 0
+    - __sap_vm_provision_register_instance_info.instances | d([]) | length > 0
+
 # - name: SAP VM Provision - AWS - Copy add host facts to provisioned host
 #   ansible.builtin.set_fact:
 #     __sap_vm_provision_fact_filesystem_volume_map: "{{ __sap_vm_provision_fact_filesystem_volume_map }}"

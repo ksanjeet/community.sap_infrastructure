@@ -36,6 +36,17 @@
       {{ disks_map }}
 
 
+# GCP labels allow only lowercase letters, digits, '_' and '-' (max. 63 characters), keys must start with a letter
+- name: SAP VM Provision - GCP - Set fact for resource labels
+  ansible.builtin.set_fact:
+    __sap_vm_provision_fact_gcp_labels: >-
+      {{ dict(sap_vm_provision_resource_tags | d({}) | dict2items
+         | map(attribute='key') | map('lower') | map('regex_replace', '[^a-z0-9_-]', '_')
+         | map('regex_replace', '^(?=[^a-z])', 'k') | map('truncate', 63, true, '', 0)
+         | zip(sap_vm_provision_resource_tags | d({}) | dict2items
+           | map(attribute='value') | map('string') | map('lower') | map('replace', '@', '-at-')
+           | map('regex_replace', '[^a-z0-9_-]', '_') | map('truncate', 63, true, '', 0))) }}
+
 ### LIMITATION - Must provision disks first and attach to VM. It is not possible to provision disks after the VM is provisioned.
 # See https://github.com/ansible-collections/google.cloud/issues/193
 # The volume creation task requires the above task to define the parameter
@@ -49,6 +60,7 @@
     size_gb: "{{ vol_item.size }}"
     type: "{{ vol_item.type }}"
     provisioned_iops: "{{ vol_item.iops | d(omit) }}"
+    labels: "{{ __sap_vm_provision_fact_gcp_labels or omit }}"
     auth_kind: "serviceaccount"
     service_account_file: "{{ sap_vm_provision_gcp_credentials_json }}"
   loop: "{{ __sap_vm_provision_fact_filesystem_volume_map }}"
@@ -101,14 +113,7 @@
     zone: "{{ sap_vm_provision_gcp_region_zone }}"
     name: "{{ inventory_hostname }}"
     machine_type: "{{ __sap_vm_provision_host_dict_spec.virtual_machine_profile }}"
-    # GCP labels allow only lowercase letters, digits, '_' and '-' (max. 63 characters), keys must start with a letter
-    labels: >-
-      {{ dict(sap_vm_provision_resource_tags | d({}) | dict2items
-         | map(attribute='key') | map('lower') | map('regex_replace', '[^a-z0-9_-]', '_')
-         | map('regex_replace', '^(?=[^a-z])', 'k') | map('truncate', 63, true, '', 0)
-         | zip(sap_vm_provision_resource_tags | d({}) | dict2items
-           | map(attribute='value') | map('string') | map('lower') | map('replace', '@', '-at-')
-           | map('regex_replace', '[^a-z0-9_-]', '_') | map('truncate', 63, true, '', 0))) or omit }}
+    labels: "{{ __sap_vm_provision_fact_gcp_labels or omit }}"
     # When disable the Anti IP Spoofing = true, then Can IP Forward = true
     can_ip_forward: "{{ __sap_vm_provision_host_dict_spec.disable_ip_anti_spoofing }}"
     network_interfaces:

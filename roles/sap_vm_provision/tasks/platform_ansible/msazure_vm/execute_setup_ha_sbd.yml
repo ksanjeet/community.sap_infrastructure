@@ -34,9 +34,8 @@
     attach_caching: ""  # Shared disks require host caching 'None'
     managed_by_extended: "{{ cluster_item.hosts | map('community.general.dict_kv', 'name')
       | map('combine', {'resource_group': sap_vm_provision_msazure_resource_group_name}) | list }}"
-    tags:
-      sap_vm_provision: "sbd"
-      sap_vm_provision_hosts: "{{ cluster_item.hosts | join('_') }}"
+    tags: "{{ {'sap_vm_provision': 'sbd', 'sap_vm_provision_hosts': cluster_item.hosts | join('_')}
+      | combine(sap_vm_provision_resource_tags | d({})) }}"
     subscription_id: "{{ sap_vm_provision_msazure_subscription_id }}"
     tenant: "{{ sap_vm_provision_msazure_tenant_id }}"
     client_id: "{{ sap_vm_provision_msazure_app_client_id }}"

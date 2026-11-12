@@ -47,6 +47,8 @@
 
 
 # Setup custom IAM Role name using sap_vm_provision_aws_ha_iam_role
+# With sap_vm_provision_aws_ha_iam_manage: false the IAM Role, its policies and the Instance Profile are not created or
+# changed; they must exist already (e.g. created once by an administrator) and the user needs iam:PassRole for the role.
 - name: SAP VM Provision - AWS - IAM Role - Prepare IAM Role name
   ansible.builtin.set_fact:
     __sap_vm_provision_aws_ha_iam_role:
@@ -89,6 +91,7 @@
     secret_key: "{{ sap_vm_provision_aws_secret_access_key }}"
   register: __sap_vm_provision_register_aws_iam_role_ha_pacemaker
   no_log: "{{ __sap_vm_provision_no_log }}"
+  when: sap_vm_provision_aws_ha_iam_manage | d(true) | bool
 
 # AWS HA for SAP - DataProvider
 - name: SAP VM Provision - AWS - IAM Policy - HA-Policy-DataProvider
@@ -125,6 +128,7 @@
     secret_key: "{{ sap_vm_provision_aws_secret_access_key }}"
   register: __sap_vm_provision_register_aws_iam_policy_dataprovider
   no_log: "{{ __sap_vm_provision_no_log }}"
+  when: sap_vm_provision_aws_ha_iam_manage | d(true) | bool
 
 # AWS HA for SAP - OverlayVirtualIPAgent
 - name: SAP VM Provision - AWS - IAM Policy - HA-Policy-OverlayVirtualIPAgent
@@ -159,6 +163,7 @@
     secret_key: "{{ sap_vm_provision_aws_secret_access_key }}"
   register: __sap_vm_provision_register_aws_iam_policy_overlayip
   no_log: "{{ __sap_vm_provision_no_log }}"
+  when: sap_vm_provision_aws_ha_iam_manage | d(true) | bool
 
 
 # Equivalent to
@@ -174,6 +179,7 @@
     secret_key: "{{ sap_vm_provision_aws_secret_access_key }}"
   register: __sap_vm_provision_register_aws_iam_attach_role
   no_log: "{{ __sap_vm_provision_no_log }}"
+  when: sap_vm_provision_aws_ha_iam_manage | d(true) | bool
 
 
 - name: SAP VM Provision - AWS - SAP HANA

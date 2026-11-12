@@ -102,6 +102,36 @@
   no_log: "{{ __sap_vm_provision_no_log }}"
 
 
+# The root volume created with the instance does not inherit the tags of the instance
+- name: SAP VM Provision - CloudStack - Read root volume of the instance
+  ngine_io.cloudstack.api_request:
+    command: listVolumes
+    params:
+      virtualmachineid: "{{ __sap_vm_provision_register_provision_host_single.id }}"
+      type: ROOT
+      listall: true
+  register: __sap_vm_provision_register_cloudstack_root_volume
+  no_log: "{{ __sap_vm_provision_no_log }}"
+  when: sap_vm_provision_resource_tags | d({}) | length > 0
+
+- name: SAP VM Provision - CloudStack - Apply resource tags to root volume of the instance
+  ngine_io.cloudstack.api_request:
+    command: createTags
+    params: "{{ __params }}"
+  vars:
+    __volume: "{{ __sap_vm_provision_register_cloudstack_root_volume.response.volume | d([{}]) | first }}"
+    __existing_keys: "{{ __volume.tags | d([]) | map(attribute='key') | list }}"
+    __missing: "{{ sap_vm_provision_resource_tags | d({}) | dict2items | rejectattr('key', 'in', __existing_keys) | list }}"
+    __params: |-
+      {% set p = {'resourceids': __volume.id | d(''), 'resourcetype': 'Volume'} %}
+      {% for tag in __missing %}{% set _ = p.update({'tags[' ~ loop.index0 ~ '].key': tag.key, 'tags[' ~ loop.index0 ~ '].value': tag.value | string}) %}{% endfor %}
+      {{ p }}
+  no_log: "{{ __sap_vm_provision_no_log }}"
+  when:
+    - sap_vm_provision_resource_tags | d({}) | length > 0
+    - __volume.id is defined
+    - __missing | length > 0
+
 - name: SAP VM Provision - CloudStack - Create fact for delegate host IP
   ansible.builtin.set_fact:
     __sap_vm_provision_fact_private_ip: "{{ __sap_vm_provision_register_provision_host_single.default_ip }}"
@@ -188,6 +218,7 @@
     disk_offering: "{{ vol_item.disk_offering }}"
     size: "{{ vol_item.size }}"
     vm: "{{ inventory_hostname }}"
+    tags: "{{ sap_vm_provision_resource_tags | d({}) | dict2items | list or omit }}"
     state: attached
   loop: "{{ __sap_vm_provision_fact_filesystem_volume_map }}"
   loop_control:

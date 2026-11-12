@@ -25,6 +25,7 @@
     resource_group: "{{ sap_vm_provision_msazure_resource_group_name }}"
     location: "{{ sap_vm_provision_msazure_location_region }}"
     name: "{{ inventory_hostname }}-nic"
+    tags: "{{ sap_vm_provision_resource_tags | d({}) or omit }}"
     virtual_network: "{{ sap_vm_provision_msazure_vnet_name }}"
     subnet_name: "{{ sap_vm_provision_msazure_vnet_subnet_name }}"
     create_with_security_group: false
@@ -110,6 +111,27 @@
     secret: "{{ sap_vm_provision_msazure_app_client_secret }}"
   register: __sap_vm_provision_register_ansible_facts_host_disks_info
   no_log: "{{ __sap_vm_provision_no_log }}"
+
+# The OS disk created with the VM does not inherit the tags of the VM
+- name: SAP VM Provision - Azure - Apply resource tags to OS disk of MS Azure VM
+  azure.azcollection.azure_rm_resource:
+    url: "{{ disk_item.id }}"
+    api_version: "2023-04-02"
+    method: PATCH
+    body:
+      tags: "{{ disk_item.tags | d({}, true) | combine(sap_vm_provision_resource_tags) }}"
+    subscription_id: "{{ sap_vm_provision_msazure_subscription_id }}"
+    tenant: "{{ sap_vm_provision_msazure_tenant_id }}"
+    client_id: "{{ sap_vm_provision_msazure_app_client_id }}"
+    secret: "{{ sap_vm_provision_msazure_app_client_secret }}"
+  loop: "{{ __sap_vm_provision_register_ansible_facts_host_disks_info.ansible_info.azure_managed_disk | d([]) }}"
+  loop_control:
+    loop_var: disk_item
+    label: "{{ disk_item.name }}"
+  no_log: "{{ __sap_vm_provision_no_log }}"
+  when:
+    - sap_vm_provision_resource_tags | d({}) | length > 0
+    - (disk_item.tags | d({}, true) | combine(sap_vm_provision_resource_tags)) != (disk_item.tags | d({}, true))
 
 # Reason for noqa: Splitting this line would always trigger jinja2 formatting warning,
 # therefore this noqa is either line length or jinja2 formatting.
@@ -213,6 +235,7 @@
     location: "{{ sap_vm_provision_msazure_location_region }}"
     name: "{{ inventory_hostname }}-vol_{{ vol_item.name }}"
     disk_size_gb: "{{ vol_item.size }}"
+    tags: "{{ sap_vm_provision_resource_tags | d({}) or omit }}"
     managed_by_extended:
       - name: "{{ inventory_hostname }}"
         resource_group: "{{ sap_vm_provision_msazure_resource_group_name }}"
