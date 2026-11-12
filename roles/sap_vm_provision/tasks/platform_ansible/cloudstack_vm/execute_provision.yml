@@ -93,11 +93,10 @@
     host: "{{ __sap_vm_provision_host_dict_spec.cloudstack_vm_host | d(omit) }}"
     user_data: "{{ __sap_vm_provision_fact_cloudstack_user_data
       if __sap_vm_provision_register_provision_host_single_check_exists.instances | d([]) | length == 0 else omit }}"
-    tags:
-      - key: sap_vm_provision
-        value: "{{ sap_vm_provision_host_specification_plan }}"
-      - key: sap_host_type
-        value: "{{ __sap_vm_provision_host_dict_spec.sap_host_type }}"
+    tags: >-
+      {{ [{'key': 'sap_vm_provision', 'value': sap_vm_provision_host_specification_plan},
+          {'key': 'sap_host_type', 'value': __sap_vm_provision_host_dict_spec.sap_host_type}]
+         + (sap_vm_provision_resource_tags | d({}) | dict2items | list) }}
     state: started
   register: __sap_vm_provision_register_provision_host_single
   no_log: "{{ __sap_vm_provision_no_log }}"

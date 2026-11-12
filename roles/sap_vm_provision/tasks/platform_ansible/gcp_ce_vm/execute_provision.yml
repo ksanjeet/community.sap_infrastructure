@@ -101,6 +101,14 @@
     zone: "{{ sap_vm_provision_gcp_region_zone }}"
     name: "{{ inventory_hostname }}"
     machine_type: "{{ __sap_vm_provision_host_dict_spec.virtual_machine_profile }}"
+    # GCP labels allow only lowercase letters, digits, '_' and '-' (max. 63 characters), keys must start with a letter
+    labels: >-
+      {{ dict(sap_vm_provision_resource_tags | d({}) | dict2items
+         | map(attribute='key') | map('lower') | map('regex_replace', '[^a-z0-9_-]', '_')
+         | map('regex_replace', '^(?=[^a-z])', 'k') | map('truncate', 63, true, '', 0)
+         | zip(sap_vm_provision_resource_tags | d({}) | dict2items
+           | map(attribute='value') | map('string') | map('lower') | map('replace', '@', '-at-')
+           | map('regex_replace', '[^a-z0-9_-]', '_') | map('truncate', 63, true, '', 0))) or omit }}
     # When disable the Anti IP Spoofing = true, then Can IP Forward = true
     can_ip_forward: "{{ __sap_vm_provision_host_dict_spec.disable_ip_anti_spoofing }}"
     network_interfaces:

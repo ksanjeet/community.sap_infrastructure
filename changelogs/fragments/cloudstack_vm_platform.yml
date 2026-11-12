@@ -2,6 +2,7 @@
 major_changes:
   - sap_vm_provision - Add Apache CloudStack platform ``cloudstack_vm`` (``sap_vm_provision_iac_type`` ``ansible``) using the ngine_io.cloudstack collection, with any hypervisor and Primary Storage, and High Availability fencing methods ``sbd_devices``, ``sbd_linstor_kvm`` and ``none``.
 minor_changes:
+  - sap_vm_provision - New variable ``sap_vm_provision_resource_tags`` to add tags to the provisioned VMs on AWS, MS Azure, Apache CloudStack and Google Cloud (labels, converted to the allowed characters).
   - sap_vm_provision - MS Azure - Add fencing method ``sbd_shared_disk`` (``sap_vm_provision_msazure_ha_fencing_method``) using an Azure shared disk, no IAM role assignment required. Default remains ``fence_azure_arm``.
   - sap_vm_provision - Configure ``/etc/sysconfig/proxy`` on SUSE hosts when ``sap_vm_provision_proxy_web_forward_proxy_ip`` is set, so zypper uses the proxy.
   - sap_vm_provision - MS Azure - Apply web forward proxy settings and re-register SUSE PAYG images without repositories through the proxy.

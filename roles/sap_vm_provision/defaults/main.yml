@@ -1109,6 +1109,11 @@ sap_vm_provision_cloudstack_vm_host_specifications_dictionary:
 # registration after a transient network error during its PAYG/BYOS check. Set to false to keep the license watcher.
 sap_vm_provision_suse_payg_disable_license_watcher: true
 
+# Additional tags/labels applied to the provisioned VMs on all platforms, e.g. {Owner: user@example.com}.
+# MS Azure / AWS / Apache CloudStack: tags as given. Google Cloud: labels, keys and values are converted to the allowed
+# characters (lowercase letters, digits, '_' and '-', max. 63 characters; '@' becomes '-at-', other characters '_').
+sap_vm_provision_resource_tags: {}
+
 # Default to prevent Infrastructure Platform credential secrets leaking
 # This should only be amended for debugging
 __sap_vm_provision_no_log: true

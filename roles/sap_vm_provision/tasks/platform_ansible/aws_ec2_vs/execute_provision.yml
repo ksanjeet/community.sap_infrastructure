@@ -14,6 +14,8 @@
   amazon.aws.ec2_instance:
     state: started
     name: "{{ inventory_hostname }}"
+    tags: "{{ sap_vm_provision_resource_tags | d({}) }}"
+    purge_tags: false  # keep tags not managed here (e.g. Name)
     image_id: "{{ (__sap_vm_provision_register_image_info.images | sort(attribute='creation_date') | last).image_id }}"
     instance_type: "{{ __sap_vm_provision_host_dict_spec.virtual_machine_profile }}"
     key_name: "{{ sap_vm_provision_aws_key_pair_name_ssh_host_public_key }}"
