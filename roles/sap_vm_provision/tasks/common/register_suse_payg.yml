@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: Apache-2.0
+---
+
+# SUSE Pay-As-You-Go images register to the SUSE Public Cloud update infrastructure at first boot (guestregister.service).
+# The registration can fail when there is no outbound connectivity yet (e.g. egress only via a Web Forward Proxy
+# configured later) or on transient errors of the update infrastructure, leaving no repositories or repositories with
+# invalid credentials. Re-register only in that case; a failed guestregister.service alone (e.g. one optional module timed
+# out) is not a reason, as the repositories may be fully usable.
+
+- name: SAP VM Provision - SUSE PAYG - Check repositories of SUSE Pay-As-You-Go image
+  ansible.builtin.shell:
+    cmd: |
+      command -v registercloudguest >/dev/null || { echo "state=not_payg"; exit 0; }
+      repos=$(zypper --quiet --non-interactive repos 2>/dev/null | grep -c '|')
+      if [ "${repos}" -eq 0 ]; then echo "state=no_repos"; exit 0; fi
+      if zypper --non-interactive --quiet refresh 2>&1 | grep -qiE 'credentials are invalid|registercloudguest --force-new'; then
+        echo "state=invalid_credentials"
+      else
+        echo "state=ok repos=${repos}"
+      fi
+  register: __sap_vm_provision_register_suse_payg_state
+  changed_when: false
+  when: ansible_facts['os_family'] == 'Suse'
+
+# registercloudguest may return non-zero when a single optional module times out although the base product and the
+# required modules are registered; success is therefore judged by usable repositories, with pauses between attempts
+# to avoid rate limiting by the region servers.
+- name: SAP VM Provision - SUSE PAYG - Register to SUSE Public Cloud update infrastructure
+  ansible.builtin.shell:
+    cmd: |
+      # Remove leftovers of a failed registration first, otherwise credentials of earlier attempts remain inconsistent
+      registercloudguest --clean >/dev/null 2>&1
+      registercloudguest --force-new >/dev/null 2>&1
+      repos=$(zypper --quiet --non-interactive repos 2>/dev/null | grep -c '|')
+      if [ "${repos}" -gt 0 ] && ! zypper --non-interactive --quiet refresh 2>&1 | grep -qiE 'credentials are invalid'; then
+        echo "registered repos=${repos}"
+      else
+        echo "not registered"; exit 1
+      fi
+  environment:
+    http_proxy: "{{ ('http://' ~ sap_vm_provision_proxy_web_forward_proxy_ip) if sap_vm_provision_proxy_web_forward_proxy_ip | d('') | length > 0 else omit }}"
+    https_proxy: "{{ ('http://' ~ sap_vm_provision_proxy_web_forward_proxy_ip) if sap_vm_provision_proxy_web_forward_proxy_ip | d('') | length > 0 else omit }}"
+    no_proxy: "localhost,127.0.0.1,169.254.169.254,metadata.google.internal"
+  register: __sap_vm_provision_register_suse_payg_registration
+  until: __sap_vm_provision_register_suse_payg_registration is succeeded
+  retries: 5
+  delay: 90
+  changed_when: true
+  when:
+    - ansible_facts['os_family'] == 'Suse'
+    - __sap_vm_provision_register_suse_payg_state.stdout | d('state=not_payg') is search('state=(no_repos|invalid_credentials)')

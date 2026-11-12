@@ -244,6 +244,10 @@
       ansible.builtin.hostname:
         name: "{{ inventory_hostname_short }}"
 
+    - name: SAP VM Provision - GCP - Ensure registration of SUSE Pay-As-You-Go images
+      ansible.builtin.include_tasks:
+        file: common/register_suse_payg.yml
+
     # GCP OS Images are missing NetworkManager-config-server package, append NetworkManager config file to ensure DHCP is still used for GCP VM
     # Primary IP Address by default uses subnet netmask /32 CIDR
     # Reason for noqa: Command block is conditional to RHEL and we should not force changed status.
