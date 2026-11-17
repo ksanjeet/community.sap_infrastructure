@@ -130,9 +130,18 @@
     # This requires no_log set on each Ansible Task, and not set on the Ansible Task Block
     # This requires an Ansible Task Block containing the Ansible Tasks for calling
     # Infrastructure Platform APIs (via Ansible Modules)
+    # Only the error messages are shown: the results of the CloudStack modules contain the API parameters
+    # (api_key, api_secret), which must not end up in logs
     - name: SAP VM Provision - CloudStack - Show errors in task outputs
       ansible.builtin.fail:
-        msg: "{{ lookup('ansible.builtin.vars', loop_item) }}"
+        msg: >-
+          {%- set result = lookup('ansible.builtin.vars', loop_item) -%}
+          {%- if result.results is defined -%}
+          {{ result.results | selectattr('failed', 'defined') | selectattr('failed')
+             | map(attribute='msg', default='failed without message') | list }}
+          {%- else -%}
+          {{ result.msg | d('failed without message') }}
+          {%- endif -%}
       loop:
         # Main
         - __sap_vm_provision_register_provision_host_all_add
